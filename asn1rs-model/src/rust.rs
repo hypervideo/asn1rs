@@ -664,7 +664,8 @@ impl Model<Rust> {
             | Type::Set(_)
             | Type::SetOf(_, _)
             | Type::Enumerated(_)
-            | Type::Choice(_) => return None,
+            | Type::Choice(_)
+            | Type::Skip => return None,
         })
     }
 
@@ -677,6 +678,7 @@ impl Model<Rust> {
     /// The name is expected in a valid and rusty way
     fn definition_to_rust(name: &str, asn: &AsnType, tag: Option<Tag>, ctxt: &mut Context<'_>) {
         match asn {
+            AsnType::Skip => {}
             AsnType::Boolean
             | AsnType::Null
             | AsnType::String(..)
@@ -866,7 +868,7 @@ impl Model<Rust> {
     ) -> RustType {
         match asn {
             AsnType::Boolean => RustType::Bool,
-            AsnType::Null => RustType::Null,
+            AsnType::Null | AsnType::Skip => RustType::Null,
             AsnType::Integer(int) if int.range.extensible() => {
                 Self::asn_extensible_integer_to_rust(int)
             }
@@ -1013,7 +1015,8 @@ impl Context<'_> {
             | Type::SetOf(..)
             | Type::Enumerated(_)
             | Type::Choice(_)
-            | Type::TypeReference(_, _) => Vec::default(),
+            | Type::TypeReference(_, _)
+            | Type::Skip => Vec::default(),
         }
     }
 
