@@ -234,7 +234,12 @@ fn parse_type_pre_stepped<'a>(
                 Ok(Type::SetOf(Box::new(inner), size))
             }
         }
-        "skip" => Ok(Type::Skip),
+        "skip" => {
+            let content;
+            parenthesized!(content in input);
+            let ident = parse_ident(&content, "Expected Rust type")?;
+            Ok(Type::Skip(ident))
+        }
         r#type => Err(input.error(format!("Unexpected attribute: `{}`", r#type))),
     }
 }

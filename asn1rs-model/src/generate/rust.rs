@@ -368,7 +368,7 @@ impl RustCodeGenerator {
 
     fn asn_attribute_type(r#type: &AsnType) -> Option<String> {
         let (name, parameters) = match r#type {
-            Type::Skip => return None,
+            Type::Skip(_) => return None,
             Type::Boolean => (Cow::Borrowed("boolean"), Vec::default()),
             Type::Integer(integer) => (
                 Cow::Borrowed("integer"),
