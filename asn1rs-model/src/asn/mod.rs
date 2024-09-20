@@ -191,6 +191,8 @@ pub enum Type<RS: ResolveState = Resolved> {
 
     /// ITU-T X.680 | ISO/IEC 8824-1, 16
     TypeReference(String, Option<Tag>),
+
+    Skip,
 }
 
 impl Type {
@@ -276,6 +278,7 @@ impl Type<Unresolved> {
         resolver: &R,
     ) -> Result<Type<Resolved>, ResolveError> {
         Ok(match self {
+            Type::Skip => Type::Skip,
             Type::Boolean => Type::Boolean,
             Type::Integer(integer) => Type::Integer(integer.try_resolve(resolver)?),
             Type::String(size, charset) => Type::String(size.try_resolve(resolver)?, *charset),

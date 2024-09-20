@@ -243,15 +243,14 @@ impl RustCodeGenerator {
 
     fn add_struct(str_ct: &mut Struct, _name: &str, fields: &[Field], pub_access: bool) {
         for field in fields {
+            let Some(attr_type) = Self::asn_attribute_type(&field.r#type().clone().into_asn())
+            else {
+                continue;
+            };
             str_ct.field(
                 &format!(
                     "{} {}{}",
-                    Self::asn_attribute(
-                        Self::asn_attribute_type(&field.r#type().clone().into_asn()),
-                        field.tag(),
-                        None,
-                        field.constants(),
-                    ),
+                    Self::asn_attribute(attr_type, field.tag(), None, field.constants(),),
                     if pub_access { "pub " } else { "" },
                     Self::rust_field_name(field.name(), true),
                 ),
@@ -274,14 +273,13 @@ impl RustCodeGenerator {
 
     fn add_data_enum(en_m: &mut Enum, _name: &str, enumeration: &DataEnum) {
         for variant in enumeration.variants() {
+            let Some(attr_type) = Self::asn_attribute_type(&variant.r#type().clone().into_asn())
+            else {
+                continue;
+            };
             en_m.new_variant(&format!(
                 "{} {}({})",
-                Self::asn_attribute(
-                    Self::asn_attribute_type(&variant.r#type().clone().into_asn()),
-                    variant.tag(),
-                    None,
-                    &[],
-                ),
+                Self::asn_attribute(attr_type, variant.tag(), None, &[],),
                 Self::rust_variant_name(variant.name()),
                 variant.r#type().to_string(),
             ));
@@ -296,14 +294,12 @@ impl RustCodeGenerator {
         tag: Option<Tag>,
         constants: &[(String, String)],
     ) {
+        let Some(attr_type) = Self::asn_attribute_type(&inner.clone().into_asn()) else {
+            return;
+        };
         str_ct.tuple_field(format!(
             "{} {}{}",
-            Self::asn_attribute(
-                Self::asn_attribute_type(&inner.clone().into_asn()),
-                tag,
-                None,
-                constants,
-            ),
+            Self::asn_attribute(attr_type, tag, None, constants,),
             if pub_access { "pub " } else { "" },
             inner.to_string(),
         ));
@@ -341,8 +337,9 @@ impl RustCodeGenerator {
         )
     }
 
-    fn asn_attribute_type(r#type: &AsnType) -> String {
+    fn asn_attribute_type(r#type: &AsnType) -> Option<String> {
         let (name, parameters) = match r#type {
+            Type::Skip => return None,
             Type::Boolean => (Cow::Borrowed("boolean"), Vec::default()),
             Type::Integer(integer) => (
                 Cow::Borrowed("integer"),
@@ -391,12 +388,12 @@ impl RustCodeGenerator {
             Type::Null => (Cow::Borrowed("null"), Vec::default()),
             Type::Optional(inner) => (
                 Cow::Borrowed("optional"),
-                vec![Self::asn_attribute_type(inner)],
+                vec![Self::asn_attribute_type(inner).expect("empty inner as_attribute_type")],
             ),
             Type::Default(inner, default) => (
                 Cow::Borrowed("default"),
                 vec![
-                    Self::asn_attribute_type(inner),
+                    Self::asn_attribute_type(inner).expect("empty inner as_attribute_type"),
                     default.as_rust_const_literal(true).to_string(),
                 ],
             ),
@@ -404,7 +401,7 @@ impl RustCodeGenerator {
                 Cow::Borrowed("sequence_of"),
                 vec![
                     size.to_constraint_string(),
-                    Some(Self::asn_attribute_type(inner)),
+                    Some(Self::asn_attribute_type(inner).expect("empty inner as_attribute_type")),
                 ]
                 .into_iter()
                 .flatten()
@@ -414,7 +411,7 @@ impl RustCodeGenerator {
                 Cow::Borrowed("set_of"),
                 vec![
                     size.to_constraint_string(),
-                    Some(Self::asn_attribute_type(inner)),
+                    Some(Self::asn_attribute_type(inner).expect("empty inner as_attribute_type")),
                 ]
                 .into_iter()
                 .flatten()
@@ -433,11 +430,11 @@ impl RustCodeGenerator {
                     .collect(),
             ),
         };
-        if parameters.is_empty() {
+        Some(if parameters.is_empty() {
             name.into_owned()
         } else {
             format!("{}({})", name, parameters.join(", "))
-        }
+        })
     }
 
     fn asn_attribute_tag(tag: Tag) -> String {
