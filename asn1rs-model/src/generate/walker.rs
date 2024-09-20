@@ -115,6 +115,7 @@ impl AsnDefWriter {
             RustType::Complex(inner, _tag) => {
                 format!("{}Complex<{}, {}Constraint>", CRATE_SYN_PREFIX, inner, name)
             }
+            RustType::Skip(name) => format!("{name}"),
         }
     }
 
@@ -448,6 +449,7 @@ impl AsnDefWriter {
                     }),
                 );
             }
+            RustType::Skip(_name) => {}
         }
     }
 
@@ -812,7 +814,13 @@ impl AsnDefWriter {
                     "const EXTENDED_AFTER_FIELD: Option<u64> = {:?};",
                     extension_after_field
                 ),
-                format!("const FIELD_COUNT: u64 = {};", fields.len()),
+                format!(
+                    "const FIELD_COUNT: u64 = {};",
+                    fields
+                        .iter()
+                        .filter(|f| !matches!(f.r#type(), RustType::Skip(_)))
+                        .count()
+                ),
                 format!(
                     "const STD_OPTIONAL_FIELDS: u64 = {};",
                     fields
@@ -860,11 +868,18 @@ impl AsnDefWriter {
                 let mut block = Block::new("Ok(Self");
 
                 for field in fields {
-                    block.line(format!(
-                        "{}: AsnDef{}::read_value(reader)?,",
-                        field.name(),
-                        Self::combined_field_type_name(name, field.name())
-                    ));
+                    match field.r#type() {
+                        RustType::Skip(name) => {
+                            block.line(format!("{}: {name}::default(),", field.name(),));
+                        }
+                        _ => {
+                            block.line(format!(
+                                "{}: AsnDef{}::read_value(reader)?,",
+                                field.name(),
+                                Self::combined_field_type_name(name, field.name())
+                            ));
+                        }
+                    }
                 }
 
                 block.after(")");
@@ -887,11 +902,16 @@ impl AsnDefWriter {
             .ret("Result<(), W::Error>");
 
         for field in fields {
-            body.line(format!(
-                "AsnDef{}::write_value(writer, &self.{})?;",
-                Self::combined_field_type_name(name, field.name()),
-                field.name(),
-            ));
+            match field.r#type() {
+                RustType::Skip(_) => {}
+                _ => {
+                    body.line(format!(
+                        "AsnDef{}::write_value(writer, &self.{})?;",
+                        Self::combined_field_type_name(name, field.name()),
+                        field.name(),
+                    ));
+                }
+            }
         }
 
         body.line("Ok(())");

@@ -56,7 +56,7 @@ impl TagResolver<'_> {
     /// ITU-T X.680 | ISO/IEC 8824-1, 41, table 8
     pub fn resolve_type_tag(&self, ty: &Type) -> Option<Tag> {
         match ty {
-            Type::Skip => None,
+            Type::Skip(_) => None,
             Type::Boolean => Some(Tag::DEFAULT_BOOLEAN),
             Type::Integer(_) => Some(Tag::DEFAULT_INTEGER),
             Type::BitString(_) => Some(Tag::DEFAULT_BIT_STRING),

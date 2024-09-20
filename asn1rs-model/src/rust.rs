@@ -54,6 +54,8 @@ pub enum RustType {
     /// thought of as a "ReferenceType"; declaring usage,
     /// but not being declared here
     Complex(String, Option<Tag>),
+
+    Skip(String),
 }
 
 impl RustType {
@@ -164,6 +166,7 @@ impl RustType {
             RustType::Option(inner) => inner.integer_range_str(),
             RustType::Default(inner, ..) => inner.integer_range_str(),
             RustType::Complex(_, _) => None,
+            RustType::Skip(_) => None,
         }
     }
 
@@ -223,6 +226,7 @@ impl RustType {
                 AsnType::Default(Box::new(value.into_asn()), default)
             }
             RustType::Complex(name, tag) => AsnType::TypeReference(name, tag),
+            RustType::Skip(_) => AsnType::Null,
         }
     }
 
@@ -264,6 +268,13 @@ impl RustType {
                     false
                 }
             }
+            RustType::Skip(name) => {
+                if let RustType::Skip(name2) = other {
+                    name == name2
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -289,6 +300,7 @@ impl RustType {
             RustType::Default(inner, ..) => return inner.tag(),
             // TODO this is wrong. This should resolve the tag from the referenced type instead, but atm the infrastructure is missing to do such a thing, see github#13
             RustType::Complex(_, tag) => return *tag,
+            RustType::Skip(_) => Tag::DEFAULT_NULL,
         })
     }
 }
@@ -402,6 +414,7 @@ impl RustType {
             }
             RustType::Default(inner, ..) => return inner.to_const_lit_string(),
             RustType::Complex(name, _) => return Cow::Owned(name.clone()),
+            RustType::Skip(name) => return Cow::Owned(name.clone()),
         })
     }
 }
@@ -426,6 +439,7 @@ impl ToString for RustType {
             RustType::Option(inner) => return format!("Option<{}>", inner.to_string()),
             RustType::Default(inner, ..) => return inner.to_string(),
             RustType::Complex(name, _) => return name.clone(),
+            RustType::Skip(name) => return name.clone(),
         }
         .into()
     }
@@ -665,7 +679,7 @@ impl Model<Rust> {
             | Type::SetOf(_, _)
             | Type::Enumerated(_)
             | Type::Choice(_)
-            | Type::Skip => return None,
+            | Type::Skip(_) => return None,
         })
     }
 
@@ -678,7 +692,7 @@ impl Model<Rust> {
     /// The name is expected in a valid and rusty way
     fn definition_to_rust(name: &str, asn: &AsnType, tag: Option<Tag>, ctxt: &mut Context<'_>) {
         match asn {
-            AsnType::Skip => {}
+            AsnType::Skip(_) => {}
             AsnType::Boolean
             | AsnType::Null
             | AsnType::String(..)
@@ -868,7 +882,7 @@ impl Model<Rust> {
     ) -> RustType {
         match asn {
             AsnType::Boolean => RustType::Bool,
-            AsnType::Null | AsnType::Skip => RustType::Null,
+            AsnType::Null => RustType::Null,
             AsnType::Integer(int) if int.range.extensible() => {
                 Self::asn_extensible_integer_to_rust(int)
             }
@@ -926,6 +940,7 @@ impl Model<Rust> {
                 ctxt.struct_or_enum_name(name),
                 (*tag).or_else(|| ctxt.resolver().resolve_tag(name)),
             ),
+            AsnType::Skip(name) => RustType::Skip(name.clone()),
         }
     }
 
@@ -1016,7 +1031,7 @@ impl Context<'_> {
             | Type::Enumerated(_)
             | Type::Choice(_)
             | Type::TypeReference(_, _)
-            | Type::Skip => Vec::default(),
+            | Type::Skip(_) => Vec::default(),
         }
     }
 
