@@ -87,6 +87,29 @@ impl Converter {
         Ok(files)
     }
 
+    pub fn to_hashmap<A: Fn(&mut RustGenerator)>(
+        &self,
+        custom_adjustments: A,
+    ) -> Result<HashMap<String, Vec<(String, String)>>, Error> {
+        let models = self.models.try_resolve_all()?;
+        let scope = models.iter().collect::<Vec<_>>();
+        let mut result = HashMap::with_capacity(models.len());
+
+        for model in &models {
+            let mut generator = RustGenerator::default();
+            generator.add_model(model.to_rust_with_scope(&scope[..]));
+
+            custom_adjustments(&mut generator);
+
+            result.insert(
+                model.name.clone(),
+                generator.to_string().map_err(|_| Error::RustGenerator)?,
+            );
+        }
+
+        Ok(result)
+    }
+
     #[cfg(feature = "protobuf")]
     pub fn to_protobuf<D: AsRef<Path>>(
         &self,
