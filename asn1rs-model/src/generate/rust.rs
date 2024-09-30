@@ -956,6 +956,11 @@ impl RustCodeGenerator {
                 en_m.derive(derive);
             });
         }
+        if let Some(local_attrs) = self.local_attrs.get(name) {
+            local_attrs.iter().for_each(|attr| {
+                en_m.r#macro(attr);
+            });
+        }
         en_m
     }
 }
@@ -1116,6 +1121,7 @@ pub(crate) mod tests {
 
         let mut generator = RustCodeGenerator::from(model).without_additional_global_derives();
         generator.add_local_derive("MyEnum", "MyDerive");
+        generator.add_local_attr("MyEnum", "#[serde(foo)]");
         let (_file_name, file_content) = generator
             .to_string_without_generators()
             .into_iter()
@@ -1128,6 +1134,7 @@ pub(crate) mod tests {
 
             #[asn(enumerated)]
             #[derive(Debug, Clone, PartialEq, Hash, Copy, PartialOrd, Eq, MyDerive, Default)]
+            #[serde(foo)]
             pub enum MyEnum {
                 #[default] A,
                 B,
