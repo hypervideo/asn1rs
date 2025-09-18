@@ -527,7 +527,6 @@ impl RustCodeGenerator {
                 for g in generators {
                     g.extend_impl_of_tuple(name, implementation, inner);
                 }
-                Self::impl_tuple_struct_const_new(scope, name, inner);
                 Self::impl_tuple_struct_deref(scope, name, inner);
                 Self::impl_tuple_struct_deref_mut(scope, name, inner);
                 Self::impl_tuple_struct_from(scope, name, inner);
@@ -570,6 +569,8 @@ impl RustCodeGenerator {
         if rust.integer_range_str().is_some() && !rust.integer_range_matches_rust() {
             Self::impl_tuple_struct_integer_try_from(scope, name, rust);
         } else {
+            Self::impl_tuple_struct_const_new(scope, name, rust);
+
             scope
                 .new_impl(name)
                 .impl_trait(format!("::core::convert::From<{}>", rust.to_string()))
