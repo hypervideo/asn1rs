@@ -567,7 +567,7 @@ impl RustCodeGenerator {
     }
 
     fn impl_tuple_struct_from(scope: &mut Scope, name: &str, rust: &RustType) {
-        if rust.integer_range_str().is_some() {
+        if rust.integer_range_str().is_some() && !rust.integer_range_matches_rust() {
             Self::impl_tuple_struct_integer_try_from(scope, name, rust);
         } else {
             scope

@@ -128,6 +128,25 @@ impl RustType {
         ) || matches!(self, RustType::Default(inner, ..) if inner.is_primitive())
     }
 
+    pub fn integer_range_matches_rust(&self) -> bool {
+        match self {
+            RustType::U8(Range(min, max, _)) => *min == u8::MIN && *max == u8::MAX,
+            RustType::I8(Range(min, max, _)) => *min == i8::MIN && *max == i8::MAX,
+            RustType::U16(Range(min, max, _)) => *min == u16::MIN && *max == u16::MAX,
+            RustType::I16(Range(min, max, _)) => *min == i16::MIN && *max == i16::MAX,
+            RustType::U32(Range(min, max, _)) => *min == u32::MIN && *max == u32::MAX,
+            RustType::I32(Range(min, max, _)) => *min == i32::MIN && *max == i32::MAX,
+            RustType::U64(Range(min, max, _)) => {
+                min.unwrap_or_default() == u64::MIN && max.unwrap_or_else(|| u64::MAX) == u64::MAX
+            }
+            RustType::I64(Range(min, max, _)) => *min == i64::MIN && *max == i64::MAX,
+            RustType::Vec(inner, ..) => inner.integer_range_matches_rust(),
+            RustType::Option(inner) => inner.integer_range_matches_rust(),
+            RustType::Default(inner, ..) => inner.integer_range_matches_rust(),
+            _ => false,
+        }
+    }
+
     pub fn integer_range_str(&self) -> Option<Range<String>> {
         #[allow(clippy::match_same_arms)] // to have the same order as the original enum
         match self {
