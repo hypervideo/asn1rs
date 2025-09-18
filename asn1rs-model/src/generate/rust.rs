@@ -567,13 +567,18 @@ impl RustCodeGenerator {
     }
 
     fn impl_tuple_struct_from(scope: &mut Scope, name: &str, rust: &RustType) {
-        scope
-            .new_impl(name)
-            .impl_trait(format!("::core::convert::From<{}>", rust.to_string()))
-            .new_fn("from")
-            .arg("value", &rust.to_string())
-            .ret("Self")
-            .line("Self(value)");
+        if rust.integer_range_str().is_some() {
+            Self::impl_tuple_struct_integer_try_from(scope, name, rust);
+        } else {
+            scope
+                .new_impl(name)
+                .impl_trait(format!("::core::convert::From<{}>", rust.to_string()))
+                .new_fn("from")
+                .arg("value", &rust.to_string())
+                .ret("Self")
+                .line("Self(value)");
+        }
+
         scope
             .new_impl(&rust.to_string())
             .impl_trait(format!("::core::convert::From<{}>", name))
@@ -581,6 +586,59 @@ impl RustCodeGenerator {
             .arg("value", name)
             .ret("Self")
             .line("value.0");
+    }
+
+    fn impl_tuple_struct_integer_try_from(scope: &mut Scope, name: &str, rust: &RustType) {
+        let error = scope
+            .new_enum(format!("{name}OutOfRangeError"))
+            .vis("pub")
+            .derive("Debug")
+            .derive("Clone")
+            .derive("PartialEq");
+        error.new_variant("TooSmall");
+        error.new_variant("TooLarge");
+
+        let try_from = scope
+            .new_impl(name)
+            .impl_trait(format!("::core::convert::TryFrom<{}>", rust.to_string()))
+            .associate_type("Error", format!("{name}OutOfRangeError"))
+            .new_fn("try_from")
+            .arg("value", &rust.to_string())
+            .ret(format!("Result<Self, Self::Error>"));
+
+        match rust {
+            RustType::Vec(_, _, _) => {
+                try_from
+                    .line("for v in &value {")
+                    .line("if *v < Self::value_min() {")
+                    .line("return Err(Self::Error::TooSmall);")
+                    .line("} else if *v > Self::value_max() {")
+                    .line("return Err(Self::Error::TooLarge);")
+                    .line("}")
+                    .line("}")
+                    .line("Ok(Self(value))");
+            }
+            RustType::Option(_) => {
+                try_from
+                    .line("if let Some(v) = &value {")
+                    .line("if v < Self::value_min() {")
+                    .line("return Err(Self::Error::TooSmall);")
+                    .line("} else if v > Self::value_max() {")
+                    .line("return Err(Self::Error::TooLarge);")
+                    .line("}")
+                    .line("}")
+                    .line("Ok(Self(value))");
+            }
+            _ => {
+                try_from
+                    .line("if value < Self::value_min() {")
+                    .line("return Err(Self::Error::TooSmall);")
+                    .line("} else if value > Self::value_max() {")
+                    .line("return Err(Self::Error::TooLarge);")
+                    .line("}")
+                    .line("Ok(Self(value))");
+            }
+        }
     }
 
     fn impl_tuple_struct<'a>(scope: &'a mut Scope, name: &str, rust: &RustType) -> &'a mut Impl {
