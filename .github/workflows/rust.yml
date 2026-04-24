@@ -10,16 +10,16 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: check
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: check
           args: --all-features
@@ -28,13 +28,13 @@ jobs:
     name: Test Suite (default)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: test
 
@@ -42,13 +42,13 @@ jobs:
     name: Test Suite (protobuf)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: test
           args: --features protobuf
@@ -57,13 +57,13 @@ jobs:
     name: Test Suite (all)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: test
           args: --all-features
@@ -72,13 +72,13 @@ jobs:
     name: Test build binary
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: build
           args: --all-features
@@ -87,14 +87,14 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
       - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: fmt
           args: --all -- --check
@@ -103,18 +103,18 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
           override: true
       - run: rustup component add clippy
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: clippy
           args: -- -D warnings
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: clippy
           args: --all-features -- -D warnings
@@ -123,8 +123,8 @@ jobs:
     name: ETSI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           profile: minimal
           toolchain: stable
@@ -135,7 +135,7 @@ jobs:
           https://forge.etsi.org/rep/ITS/asn1/cdd_ts102894_2/raw/151b191121d05c3b808f5dec14387339730db14f/ITS-Container.asn
           https://forge.etsi.org/rep/ITS/asn1/cam_en302637_2/raw/7ae4195d48dd468754a50f1a3bb0c2ce976ae15a/CAM-PDU-Descriptions.asn
           https://forge.etsi.org/rep/ITS/asn1/denm_en302637_3/raw/29ec748fd9a0e44b91e1896867fa34453781e334/DENM-PDU-Descriptions.asn
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: run
           args: -- tests ITS-Container.asn CAM-PDU-Descriptions.asn DENM-PDU-Descriptions.asn
@@ -149,7 +149,7 @@ jobs:
       - run: cat tests/its_container.rs
       - run: cat tests/cam_pdu_descriptions.rs
       - run: cat tests/denm_pdu_descriptions.rs
-      - uses: actions-rs/cargo@v1
+      - uses: actions-rs/cargo@v1.0.3
         with:
           command: test
           args: >
@@ -161,25 +161,25 @@ jobs:
     name: Test Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: actions-rs/toolchain@v1.0.7
         with:
           toolchain: nightly
           override: true
       - name: Run cargo-tarpaulin
-        uses: actions-rs/tarpaulin@v0.1
+        uses: actions-rs/tarpaulin@v0.1.3
         with:
           version: '0.18.0-alpha1'
           args: '--out Xml --out Lcov -p asn1rs -p asn1rs-model -p asn1rs-macros --all-features -- --test-threads 1 --nocapture'
 
       - name: Archive code coverage results
-        uses: actions/upload-artifact@v1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: code-coverage-report
           path: cobertura.xml
 
       - name: Upload to Coveralls
-        uses: coverallsapp/github-action@master
+        uses: coverallsapp/github-action@v2.3.7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: './lcov.info'
@@ -188,5 +188,5 @@ jobs:
     name: Check license and vulnerabilities
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: EmbarkStudios/cargo-deny-action@v1
+      - uses: actions/checkout@v6.0.2
+      - uses: EmbarkStudios/cargo-deny-action@v2.0.17
