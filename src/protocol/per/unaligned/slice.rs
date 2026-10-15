@@ -8,7 +8,7 @@ use crate::protocol::per::{Error, ErrorKind};
 impl BitRead for (&[u8], &mut usize) {
     #[inline]
     fn read_bit(&mut self) -> Result<bool, Error> {
-        if *self.1 > self.0.len() * BYTE_LEN {
+        if *self.1 >= self.0.len() * BYTE_LEN {
             return Err(ErrorKind::EndOfStream.into());
         }
         let bit = self.0[*self.1 / BYTE_LEN] & (0x80 >> (*self.1 % BYTE_LEN)) != 0;
@@ -110,5 +110,19 @@ impl<'a> BitWrite for (&'a mut [u8], &mut usize) {
         write_u64(self.0, *self.1, bit_len, value);
         *self.1 += bit_len;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_bit_at_the_end_is_end_of_stream() {
+        let mut pos = 7;
+        let mut bits = (&[0x01_u8][..], &mut pos);
+        assert_eq!(Ok(true), bits.read_bit());
+        assert_eq!(Err(ErrorKind::EndOfStream.into()), bits.read_bit());
+        assert_eq!(8, pos);
     }
 }
