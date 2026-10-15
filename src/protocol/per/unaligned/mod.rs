@@ -2,6 +2,7 @@ use crate::descriptor::octetstring::OctetStringType;
 use crate::protocol::per::{Error, ErrorKind};
 use crate::protocol::per::{PackedRead, PackedWrite};
 
+mod bitcopy;
 pub mod buffer;
 #[cfg(feature = "bytes")]
 pub mod shared;
