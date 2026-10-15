@@ -9,28 +9,29 @@ Speedups are `before / after`.
 
 ## Summary
 
-From the original code to change 1 (Copy bits word-at-a-time instead of bit-by-bit):
+From the original code to change 2 (Grow `BitBuffer` with `Vec::resize`):
 
 | Benchmark | arm64 | x86_64 (Rosetta) | wasm32 | wasm32 +simd128 |
 |---|---:|---:|---:|---:|
-| `datagram/video_fragment/encode` | 328 → 240 ns (1.36×) | 560 → 416 ns (1.34×) | 496 → 319 ns (1.55×) | 480 → 346 ns (1.39×) |
-| `datagram/video_fragment/decode` | 220 → 90.5 ns (2.43×) | 548 → 138 ns (3.96×) | 355 → 251 ns (1.42×) | 337 → 254 ns (1.32×) |
-| `datagram/transport_feedback_64/encode` | 3,076 → 2,309 ns (1.33×) | 5,756 → 4,346 ns (1.32×) | 4,958 → 3,269 ns (1.52×) | 4,827 → 3,653 ns (1.32×) |
-| `datagram/transport_feedback_64/decode` | 2,860 → 1,300 ns (2.20×) | 7,250 → 2,136 ns (3.39×) | 4,494 → 2,777 ns (1.62×) | 4,520 → 2,802 ns (1.61×) |
-| `datagram/padding_1200/encode` | 758 → 128 ns (5.92×) | 1,751 → 236 ns (7.41×) | 1,118 → 215 ns (5.20×) | 1,117 → 185 ns (6.03×) |
-| `datagram/padding_1200/decode` | 716 → 69.7 ns (10.28×) | 1,792 → 143 ns (12.56×) | 1,080 → 166 ns (6.52×) | 1,082 → 127 ns (8.55×) |
-| `strings/profile/encode` | 788 → 468 ns (1.68×) | 952 → 846 ns (1.12×) | 773 → 612 ns (1.26×) | 770 → 627 ns (1.23×) |
-| `strings/profile/decode` | 253 → 119 ns (2.13×) | 877 → 187 ns (4.69×) | 336 → 336 ns (1.00×) | 334 → 359 ns (0.93×) |
-| `bits/write_unaligned_1200` | 647 → 36.2 ns (17.88×) | 1,614 → 81.4 ns (19.82×) | 975 → 96.3 ns (10.13×) | 973 → 57.9 ns (16.81×) |
-| `bits/read_unaligned_1200` | 637 → 22.1 ns (28.83×) | 1,609 → 61.5 ns (26.16×) | 969 → 74.6 ns (12.99×) | 967 → 37.3 ns (25.92×) |
-| `fields/write_256_mixed_ints` | 1,786 → 1,537 ns (1.16×) | 3,659 → 3,061 ns (1.20×) | 4,332 → 2,371 ns (1.83×) | 4,345 → 2,542 ns (1.71×) |
-| `fields/read_256_mixed_ints` | 1,945 → 297 ns (6.55×) | 4,752 → 545 ns (8.72×) | 2,900 → 610 ns (4.75×) | 2,927 → 615 ns (4.76×) |
+| `datagram/video_fragment/encode` | 328 → 218 ns (1.51×) | 560 → 349 ns (1.60×) | 496 → 318 ns (1.56×) | 480 → 347 ns (1.38×) |
+| `datagram/video_fragment/decode` | 220 → 91.2 ns (2.42×) | 548 → 139 ns (3.94×) | 355 → 252 ns (1.41×) | 337 → 255 ns (1.32×) |
+| `datagram/transport_feedback_64/encode` | 3,076 → 2,069 ns (1.49×) | 5,756 → 3,449 ns (1.67×) | 4,958 → 2,933 ns (1.69×) | 4,827 → 3,290 ns (1.47×) |
+| `datagram/transport_feedback_64/decode` | 2,860 → 1,298 ns (2.20×) | 7,250 → 1,964 ns (3.69×) | 4,494 → 2,952 ns (1.52×) | 4,520 → 2,830 ns (1.60×) |
+| `datagram/padding_1200/encode` | 758 → 122 ns (6.20×) | 1,751 → 214 ns (8.19×) | 1,118 → 203 ns (5.50×) | 1,117 → 169 ns (6.59×) |
+| `datagram/padding_1200/decode` | 716 → 69.4 ns (10.32×) | 1,792 → 143 ns (12.51×) | 1,080 → 166 ns (6.52×) | 1,082 → 127 ns (8.54×) |
+| `strings/profile/encode` | 788 → 397 ns (1.98×) | 952 → 604 ns (1.58×) | 773 → 466 ns (1.66×) | 770 → 488 ns (1.58×) |
+| `strings/profile/decode` | 253 → 119 ns (2.12×) | 877 → 188 ns (4.66×) | 336 → 335 ns (1.00×) | 334 → 357 ns (0.94×) |
+| `bits/write_unaligned_1200` | 647 → 36.2 ns (17.88×) | 1,614 → 76.6 ns (21.07×) | 975 → 92.8 ns (10.51×) | 973 → 55.1 ns (17.66×) |
+| `bits/read_unaligned_1200` | 637 → 21.8 ns (29.23×) | 1,609 → 61.1 ns (26.33×) | 969 → 74.8 ns (12.95×) | 967 → 37.3 ns (25.92×) |
+| `fields/write_256_mixed_ints` | 1,786 → 1,340 ns (1.33×) | 3,659 → 2,120 ns (1.73×) | 4,332 → 2,201 ns (1.97×) | 4,345 → 2,478 ns (1.75×) |
+| `fields/read_256_mixed_ints` | 1,945 → 310 ns (6.27×) | 4,752 → 373 ns (12.75×) | 2,900 → 612 ns (4.74×) | 2,927 → 616 ns (4.75×) |
 
 The changes so far:
 
 | | Change |
 |---|---|
 | 1 | Copy bits word-at-a-time instead of bit-by-bit |
+| 2 | Grow `BitBuffer` with `Vec::resize` |
 
 The encoded bytes do not change. After every change, a differential test encoded 4000 random
 datagrams and 4000 random string sequences (about 11.7 MB of output) and compared the output byte
@@ -213,6 +214,20 @@ Unlike the old byte loop, the new copy keeps the destination bits after the copi
 bit-by-bit path always kept them, so the result now no longer depends on the length of the range.
 Encoders never relied on the old behavior, because they write into zeroed bytes.
 
+### 2. Grow `BitBuffer` with `Vec::resize`
+
+`ensure_can_write_additional_bits` runs before every write and grew the buffer through
+`extend(repeat(0).take(n))`. `resize` does the same with less overhead.
+
+| Benchmark | arm64 before → after (ns) | arm64 | x86_64 (Rosetta) | wasm32 | wasm32 +simd128 |
+|---|---:|---:|---:|---:|---:|
+| `datagram/video_fragment/encode` | 240 → 218 | 1.10× | 1.19× | 1.00× | 1.00× |
+| `datagram/transport_feedback_64/encode` | 2,309 → 2,069 | 1.12× | 1.26× | 1.11× | 1.11× |
+| `datagram/padding_64/encode` | 99.4 → 97.4 | 1.02× | 1.16× | 1.08× | 1.08× |
+| `strings/profile/encode` | 468 → 397 | 1.18× | 1.40× | 1.31× | 1.28× |
+| `bits/write_unaligned_16` | 12.7 → 11.9 | 1.07× | 1.21× | 1.06× | 1.06× |
+| `fields/write_256_mixed_ints` | 1,537 → 1,340 | 1.15× | 1.44× | 1.08× | 1.03× |
+
 ## Findings not addressed
 
 - `UperReader::read_whole_sub_slice` limits the readable length through
@@ -231,100 +246,100 @@ original code to the last change.
 
 ### arm64
 
-| Benchmark | original | 1 | total |
-|---|---:|---:|---:|
-| `datagram/video_fragment/encode` | 328 | 240 | 1.36× |
-| `datagram/video_fragment/decode` | 220 | 90.5 | 2.43× |
-| `datagram/transport_feedback_64/encode` | 3,076 | 2,309 | 1.33× |
-| `datagram/transport_feedback_64/decode` | 2,860 | 1,300 | 2.20× |
-| `datagram/padding_64/encode` | 134 | 99.4 | 1.35× |
-| `datagram/padding_64/decode` | 97.3 | 36.5 | 2.67× |
-| `datagram/padding_1200/encode` | 758 | 128 | 5.92× |
-| `datagram/padding_1200/decode` | 716 | 69.7 | 10.28× |
-| `datagram/padding_16000/encode` | 8,447 | 534 | 15.83× |
-| `datagram/padding_16000/decode` | 8,415 | 475 | 17.72× |
-| `strings/profile/encode` | 788 | 468 | 1.68× |
-| `strings/profile/decode` | 253 | 119 | 2.13× |
-| `bits/write_unaligned_16` | 13.7 | 12.7 | 1.08× |
-| `bits/read_unaligned_16` | 14.5 | 3.7 | 3.92× |
-| `bits/write_unaligned_1200` | 647 | 36.2 | 17.88× |
-| `bits/read_unaligned_1200` | 637 | 22.1 | 28.83× |
-| `bits/write_unaligned_16000` | 8,419 | 430 | 19.60× |
-| `bits/read_unaligned_16000` | 8,304 | 298 | 27.83× |
-| `fields/write_256_mixed_ints` | 1,786 | 1,537 | 1.16× |
-| `fields/read_256_mixed_ints` | 1,945 | 297 | 6.55× |
+| Benchmark | original | 1 | 2 | total |
+|---|---:|---:|---:|---:|
+| `datagram/video_fragment/encode` | 328 | 240 | 218 | 1.51× |
+| `datagram/video_fragment/decode` | 220 | 90.5 | 91.2 | 2.42× |
+| `datagram/transport_feedback_64/encode` | 3,076 | 2,309 | 2,069 | 1.49× |
+| `datagram/transport_feedback_64/decode` | 2,860 | 1,300 | 1,298 | 2.20× |
+| `datagram/padding_64/encode` | 134 | 99.4 | 97.4 | 1.38× |
+| `datagram/padding_64/decode` | 97.3 | 36.5 | 36.4 | 2.67× |
+| `datagram/padding_1200/encode` | 758 | 128 | 122 | 6.20× |
+| `datagram/padding_1200/decode` | 716 | 69.7 | 69.4 | 10.32× |
+| `datagram/padding_16000/encode` | 8,447 | 534 | 521 | 16.21× |
+| `datagram/padding_16000/decode` | 8,415 | 475 | 478 | 17.61× |
+| `strings/profile/encode` | 788 | 468 | 397 | 1.98× |
+| `strings/profile/decode` | 253 | 119 | 119 | 2.12× |
+| `bits/write_unaligned_16` | 13.7 | 12.7 | 11.9 | 1.15× |
+| `bits/read_unaligned_16` | 14.5 | 3.7 | 3.7 | 3.92× |
+| `bits/write_unaligned_1200` | 647 | 36.2 | 36.2 | 17.88× |
+| `bits/read_unaligned_1200` | 637 | 22.1 | 21.8 | 29.23× |
+| `bits/write_unaligned_16000` | 8,419 | 430 | 436 | 19.30× |
+| `bits/read_unaligned_16000` | 8,304 | 298 | 299 | 27.76× |
+| `fields/write_256_mixed_ints` | 1,786 | 1,537 | 1,340 | 1.33× |
+| `fields/read_256_mixed_ints` | 1,945 | 297 | 310 | 6.27× |
 
 ### x86_64 (Rosetta)
 
-| Benchmark | original | 1 | total |
-|---|---:|---:|---:|
-| `datagram/video_fragment/encode` | 560 | 416 | 1.34× |
-| `datagram/video_fragment/decode` | 548 | 138 | 3.96× |
-| `datagram/transport_feedback_64/encode` | 5,756 | 4,346 | 1.32× |
-| `datagram/transport_feedback_64/decode` | 7,250 | 2,136 | 3.39× |
-| `datagram/padding_64/encode` | 239 | 159 | 1.51× |
-| `datagram/padding_64/decode` | 231 | 59.9 | 3.86× |
-| `datagram/padding_1200/encode` | 1,751 | 236 | 7.41× |
-| `datagram/padding_1200/decode` | 1,792 | 143 | 12.56× |
-| `datagram/padding_16000/encode` | 21,037 | 1,108 | 18.99× |
-| `datagram/padding_16000/decode` | 21,504 | 1,006 | 21.38× |
-| `strings/profile/encode` | 952 | 846 | 1.12× |
-| `strings/profile/decode` | 877 | 187 | 4.69× |
-| `bits/write_unaligned_16` | 31.6 | 25.3 | 1.25× |
-| `bits/read_unaligned_16` | 37.1 | 7.2 | 5.15× |
-| `bits/write_unaligned_1200` | 1,614 | 81.4 | 19.82× |
-| `bits/read_unaligned_1200` | 1,609 | 61.5 | 26.16× |
-| `bits/write_unaligned_16000` | 21,371 | 956 | 22.35× |
-| `bits/read_unaligned_16000` | 21,203 | 818 | 25.93× |
-| `fields/write_256_mixed_ints` | 3,659 | 3,061 | 1.20× |
-| `fields/read_256_mixed_ints` | 4,752 | 545 | 8.72× |
+| Benchmark | original | 1 | 2 | total |
+|---|---:|---:|---:|---:|
+| `datagram/video_fragment/encode` | 560 | 416 | 349 | 1.60× |
+| `datagram/video_fragment/decode` | 548 | 138 | 139 | 3.94× |
+| `datagram/transport_feedback_64/encode` | 5,756 | 4,346 | 3,449 | 1.67× |
+| `datagram/transport_feedback_64/decode` | 7,250 | 2,136 | 1,964 | 3.69× |
+| `datagram/padding_64/encode` | 239 | 159 | 137 | 1.75× |
+| `datagram/padding_64/decode` | 231 | 59.9 | 61.6 | 3.75× |
+| `datagram/padding_1200/encode` | 1,751 | 236 | 214 | 8.19× |
+| `datagram/padding_1200/decode` | 1,792 | 143 | 143 | 12.51× |
+| `datagram/padding_16000/encode` | 21,037 | 1,108 | 1,082 | 19.44× |
+| `datagram/padding_16000/decode` | 21,504 | 1,006 | 1,006 | 21.38× |
+| `strings/profile/encode` | 952 | 846 | 604 | 1.58× |
+| `strings/profile/decode` | 877 | 187 | 188 | 4.66× |
+| `bits/write_unaligned_16` | 31.6 | 25.3 | 20.9 | 1.51× |
+| `bits/read_unaligned_16` | 37.1 | 7.2 | 7.0 | 5.30× |
+| `bits/write_unaligned_1200` | 1,614 | 81.4 | 76.6 | 21.07× |
+| `bits/read_unaligned_1200` | 1,609 | 61.5 | 61.1 | 26.33× |
+| `bits/write_unaligned_16000` | 21,371 | 956 | 946 | 22.59× |
+| `bits/read_unaligned_16000` | 21,203 | 818 | 815 | 26.02× |
+| `fields/write_256_mixed_ints` | 3,659 | 3,061 | 2,120 | 1.73× |
+| `fields/read_256_mixed_ints` | 4,752 | 545 | 373 | 12.75× |
 
 ### wasm32
 
-| Benchmark | original | 1 | total |
-|---|---:|---:|---:|
-| `datagram/video_fragment/encode` | 496 | 319 | 1.55× |
-| `datagram/video_fragment/decode` | 355 | 251 | 1.42× |
-| `datagram/transport_feedback_64/encode` | 4,958 | 3,269 | 1.52× |
-| `datagram/transport_feedback_64/decode` | 4,494 | 2,777 | 1.62× |
-| `datagram/padding_64/encode` | 191 | 134 | 1.42× |
-| `datagram/padding_64/decode` | 157 | 90.4 | 1.74× |
-| `datagram/padding_1200/encode` | 1,118 | 215 | 5.20× |
-| `datagram/padding_1200/decode` | 1,080 | 166 | 6.52× |
-| `datagram/padding_16000/encode` | 12,994 | 1,217 | 10.67× |
-| `datagram/padding_16000/decode` | 12,932 | 1,174 | 11.02× |
-| `strings/profile/encode` | 773 | 612 | 1.26× |
-| `strings/profile/decode` | 336 | 336 | 1.00× |
-| `bits/write_unaligned_16` | 23.6 | 18.2 | 1.30× |
-| `bits/read_unaligned_16` | 21.9 | 5.5 | 3.98× |
-| `bits/write_unaligned_1200` | 975 | 96.3 | 10.13× |
-| `bits/read_unaligned_1200` | 969 | 74.6 | 12.99× |
-| `bits/write_unaligned_16000` | 12,831 | 1,083 | 11.85× |
-| `bits/read_unaligned_16000` | 12,721 | 949 | 13.41× |
-| `fields/write_256_mixed_ints` | 4,332 | 2,371 | 1.83× |
-| `fields/read_256_mixed_ints` | 2,900 | 610 | 4.75× |
+| Benchmark | original | 1 | 2 | total |
+|---|---:|---:|---:|---:|
+| `datagram/video_fragment/encode` | 496 | 319 | 318 | 1.56× |
+| `datagram/video_fragment/decode` | 355 | 251 | 252 | 1.41× |
+| `datagram/transport_feedback_64/encode` | 4,958 | 3,269 | 2,933 | 1.69× |
+| `datagram/transport_feedback_64/decode` | 4,494 | 2,777 | 2,952 | 1.52× |
+| `datagram/padding_64/encode` | 191 | 134 | 124 | 1.54× |
+| `datagram/padding_64/decode` | 157 | 90.4 | 89.6 | 1.75× |
+| `datagram/padding_1200/encode` | 1,118 | 215 | 203 | 5.50× |
+| `datagram/padding_1200/decode` | 1,080 | 166 | 166 | 6.52× |
+| `datagram/padding_16000/encode` | 12,994 | 1,217 | 1,203 | 10.80× |
+| `datagram/padding_16000/decode` | 12,932 | 1,174 | 1,172 | 11.03× |
+| `strings/profile/encode` | 773 | 612 | 466 | 1.66× |
+| `strings/profile/decode` | 336 | 336 | 335 | 1.00× |
+| `bits/write_unaligned_16` | 23.6 | 18.2 | 17.1 | 1.38× |
+| `bits/read_unaligned_16` | 21.9 | 5.5 | 5.5 | 3.98× |
+| `bits/write_unaligned_1200` | 975 | 96.3 | 92.8 | 10.51× |
+| `bits/read_unaligned_1200` | 969 | 74.6 | 74.8 | 12.95× |
+| `bits/write_unaligned_16000` | 12,831 | 1,083 | 1,075 | 11.93× |
+| `bits/read_unaligned_16000` | 12,721 | 949 | 949 | 13.41× |
+| `fields/write_256_mixed_ints` | 4,332 | 2,371 | 2,201 | 1.97× |
+| `fields/read_256_mixed_ints` | 2,900 | 610 | 612 | 4.74× |
 
 ### wasm32 +simd128
 
-| Benchmark | original | 1 | total |
-|---|---:|---:|---:|
-| `datagram/video_fragment/encode` | 480 | 346 | 1.39× |
-| `datagram/video_fragment/decode` | 337 | 254 | 1.32× |
-| `datagram/transport_feedback_64/encode` | 4,827 | 3,653 | 1.32× |
-| `datagram/transport_feedback_64/decode` | 4,520 | 2,802 | 1.61× |
-| `datagram/padding_64/encode` | 192 | 137 | 1.40× |
-| `datagram/padding_64/decode` | 159 | 87.7 | 1.81× |
-| `datagram/padding_1200/encode` | 1,117 | 185 | 6.03× |
-| `datagram/padding_1200/decode` | 1,082 | 127 | 8.55× |
-| `datagram/padding_16000/encode` | 12,963 | 704 | 18.42× |
-| `datagram/padding_16000/decode` | 12,949 | 655 | 19.77× |
-| `strings/profile/encode` | 770 | 627 | 1.23× |
-| `strings/profile/decode` | 334 | 359 | 0.93× |
-| `bits/write_unaligned_16` | 23.5 | 19.3 | 1.22× |
-| `bits/read_unaligned_16` | 21.8 | 5.5 | 3.96× |
-| `bits/write_unaligned_1200` | 973 | 57.9 | 16.81× |
-| `bits/read_unaligned_1200` | 967 | 37.3 | 25.92× |
-| `bits/write_unaligned_16000` | 12,814 | 585 | 21.91× |
-| `bits/read_unaligned_16000` | 12,702 | 449 | 28.30× |
-| `fields/write_256_mixed_ints` | 4,345 | 2,542 | 1.71× |
-| `fields/read_256_mixed_ints` | 2,927 | 615 | 4.76× |
+| Benchmark | original | 1 | 2 | total |
+|---|---:|---:|---:|---:|
+| `datagram/video_fragment/encode` | 480 | 346 | 347 | 1.38× |
+| `datagram/video_fragment/decode` | 337 | 254 | 255 | 1.32× |
+| `datagram/transport_feedback_64/encode` | 4,827 | 3,653 | 3,290 | 1.47× |
+| `datagram/transport_feedback_64/decode` | 4,520 | 2,802 | 2,830 | 1.60× |
+| `datagram/padding_64/encode` | 192 | 137 | 127 | 1.51× |
+| `datagram/padding_64/decode` | 159 | 87.7 | 88.1 | 1.80× |
+| `datagram/padding_1200/encode` | 1,117 | 185 | 169 | 6.59× |
+| `datagram/padding_1200/decode` | 1,082 | 127 | 127 | 8.54× |
+| `datagram/padding_16000/encode` | 12,963 | 704 | 693 | 18.70× |
+| `datagram/padding_16000/decode` | 12,949 | 655 | 654 | 19.79× |
+| `strings/profile/encode` | 770 | 627 | 488 | 1.58× |
+| `strings/profile/decode` | 334 | 359 | 357 | 0.94× |
+| `bits/write_unaligned_16` | 23.5 | 19.3 | 18.2 | 1.29× |
+| `bits/read_unaligned_16` | 21.8 | 5.5 | 5.5 | 3.96× |
+| `bits/write_unaligned_1200` | 973 | 57.9 | 55.1 | 17.66× |
+| `bits/read_unaligned_1200` | 967 | 37.3 | 37.3 | 25.92× |
+| `bits/write_unaligned_16000` | 12,814 | 585 | 585 | 21.90× |
+| `bits/read_unaligned_16000` | 12,702 | 449 | 449 | 28.27× |
+| `fields/write_256_mixed_ints` | 4,345 | 2,542 | 2,478 | 1.75× |
+| `fields/read_256_mixed_ints` | 2,927 | 615 | 616 | 4.75× |
