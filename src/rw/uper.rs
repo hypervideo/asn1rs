@@ -106,27 +106,13 @@ impl Scope {
                 number_of_ext_fields,
             } => {
                 if *calls_until_ext_bitfield == 0 {
-                    buffer.with_write_position_at(*ext_bit_pos, |b| b.write_bit(is_present))?;
-                    if is_present {
-                        // when we reach this point, there is never zero numbers of ext-fields
-                        buffer.write_normally_small_non_negative_whole_number(
-                            *number_of_ext_fields as u64 - 1,
-                        )?;
-                        let pos = buffer.write_position;
-                        for _ in 0..*number_of_ext_fields {
-                            if let Err(e) = buffer.write_bit(true) {
-                                buffer.write_position = pos;
-                                return Err(e);
-                            }
-                        }
-
-                        // pos + 1 because the bit for the current call is already set
-                        // by the initializer loop above
-                        let range = pos + 1..buffer.write_position;
-                        *self = Scope::AllBitField(range);
-                    } else {
-                        *self = Scope::ExtensibleSequenceEmpty(name);
-                    }
+                    *self = Self::write_extension_header(
+                        buffer,
+                        name,
+                        *ext_bit_pos,
+                        *number_of_ext_fields,
+                        is_present,
+                    )?;
                     // no need for this
                     // if is_present is true, the bit is already set (initialize loop above)
                     // if is_present is false, no bit will be written (empty)
@@ -197,27 +183,14 @@ impl Scope {
                 number_of_ext_fields,
             } => {
                 if *calls_until_ext_bitfield == 0 {
-                    if bits.with_read_position_at(*ext_bit_pos, |b| b.read_bit())? {
-                        let read_number_of_ext_fields =
-                            bits.read_normally_small_length()? as usize + 1;
-                        if read_number_of_ext_fields > *number_of_ext_fields {
-                            #[cfg(feature = "descriptive-deserialize-errors")]
-                            descriptions.push(ScopeDescription::warning(
-                                format!("read_number_of_ext_fields({read_number_of_ext_fields}) > *number_of_ext_fields({number_of_ext_fields})")
-                            ));
-                            //     return Err(Error::UnsupportedOperation(format!(
-                            //         "Expected no more than {} extended field{} but got {}",
-                            //         number_of_ext_fields,
-                            //         if *number_of_ext_fields != 1 { "s" } else { "" },
-                            //         read_number_of_ext_fields
-                            //     )));
-                        }
-                        let range = bits.pos()..bits.pos() + *number_of_ext_fields;
-                        bits.set_pos(range.start + read_number_of_ext_fields); // skip bit-field
-                        *self = Scope::AllBitField(range);
-                    } else {
-                        *self = Scope::ExtensibleSequenceEmpty(name);
-                    }
+                    *self = Self::read_extension_header(
+                        #[cfg(feature = "descriptive-deserialize-errors")]
+                        descriptions,
+                        bits,
+                        name,
+                        *ext_bit_pos,
+                        *number_of_ext_fields,
+                    )?;
                     self.read_from_field(
                         #[cfg(feature = "descriptive-deserialize-errors")]
                         descriptions,
@@ -239,6 +212,71 @@ impl Scope {
                 }
             }
             Scope::ExtensibleSequenceEmpty(_) => Ok(Some(false)),
+        }
+    }
+
+    /// Writes the presence flag and the bit-field of the extension fields, once the first of them
+    /// is reached. This happens at most once per sequence, so it is kept out of the code that is
+    /// inlined for every field.
+    #[inline(never)]
+    fn write_extension_header(
+        buffer: &mut BitBuffer,
+        name: &'static str,
+        ext_bit_pos: usize,
+        number_of_ext_fields: usize,
+        is_present: bool,
+    ) -> Result<Scope, Error> {
+        buffer.with_write_position_at(ext_bit_pos, |b| b.write_bit(is_present))?;
+        if is_present {
+            // when we reach this point, there is never zero numbers of ext-fields
+            buffer
+                .write_normally_small_non_negative_whole_number(number_of_ext_fields as u64 - 1)?;
+            let pos = buffer.write_position;
+            for _ in 0..number_of_ext_fields {
+                if let Err(e) = buffer.write_bit(true) {
+                    buffer.write_position = pos;
+                    return Err(e);
+                }
+            }
+
+            // pos + 1 because the bit for the current call is already set
+            // by the initializer loop above
+            Ok(Scope::AllBitField(pos + 1..buffer.write_position))
+        } else {
+            Ok(Scope::ExtensibleSequenceEmpty(name))
+        }
+    }
+
+    /// Reads the presence flag and the bit-field of the extension fields, once the first of them
+    /// is reached. This happens at most once per sequence, so it is kept out of the code that is
+    /// inlined for every field.
+    #[inline(never)]
+    fn read_extension_header(
+        #[cfg(feature = "descriptive-deserialize-errors")] descriptions: &mut Vec<ScopeDescription>,
+        bits: &mut impl ScopedBitRead,
+        name: &'static str,
+        ext_bit_pos: usize,
+        number_of_ext_fields: usize,
+    ) -> Result<Scope, Error> {
+        if bits.with_read_position_at(ext_bit_pos, |b| b.read_bit())? {
+            let read_number_of_ext_fields = bits.read_normally_small_length()? as usize + 1;
+            if read_number_of_ext_fields > number_of_ext_fields {
+                #[cfg(feature = "descriptive-deserialize-errors")]
+                descriptions.push(ScopeDescription::warning(
+                    format!("read_number_of_ext_fields({read_number_of_ext_fields}) > *number_of_ext_fields({number_of_ext_fields})")
+                ));
+                //     return Err(Error::UnsupportedOperation(format!(
+                //         "Expected no more than {} extended field{} but got {}",
+                //         number_of_ext_fields,
+                //         if *number_of_ext_fields != 1 { "s" } else { "" },
+                //         read_number_of_ext_fields
+                //     )));
+            }
+            let range = bits.pos()..bits.pos() + number_of_ext_fields;
+            bits.set_pos(range.start + read_number_of_ext_fields); // skip bit-field
+            Ok(Scope::AllBitField(range))
+        } else {
+            Ok(Scope::ExtensibleSequenceEmpty(name))
         }
     }
 }
