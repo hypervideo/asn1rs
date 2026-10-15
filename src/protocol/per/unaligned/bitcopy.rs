@@ -3,6 +3,7 @@
 //! PER numbers bits MSB-first: bit 0 is the most significant bit of byte 0. All functions in this
 //! module leave the bits of the destination outside of the written range untouched.
 
+use super::simd;
 use super::BYTE_LEN;
 use crate::protocol::per::Error;
 
@@ -147,7 +148,8 @@ fn store_be(dst: &mut [u8], index: usize, shift: usize, len: usize, value: u64) 
 fn shift_left(dst: &mut [u8], src: &[u8], shift: u32) {
     debug_assert_eq!(src.len(), dst.len() + 1);
     debug_assert!((1..8).contains(&shift));
-    shift_left_swar(dst, src, shift);
+    let done = simd::shift_left(dst, src, shift);
+    shift_left_swar(&mut dst[done..], &src[done..], shift);
 }
 
 /// [`shift_left`] for eight bytes at a time within a `u64`.

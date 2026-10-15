@@ -6,6 +6,7 @@ mod bitcopy;
 pub mod buffer;
 #[cfg(feature = "bytes")]
 pub mod shared;
+mod simd;
 pub mod slice;
 
 pub const BYTE_LEN: usize = 8;
