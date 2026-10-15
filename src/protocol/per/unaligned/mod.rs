@@ -18,6 +18,19 @@ const LENGTH_64K: u64 = 64 * 1024;
 
 const SMALL_NON_NEGATIVE_NUMBER: u64 = 64;
 
+const U64_BIT_LEN: usize = u64::BITS as usize;
+
+/// Ensures that `bit_len` bits fit into an `u64`, as required by [`BitRead::read_bits_u64`] and
+/// [`BitWrite::write_bits_u64`].
+#[inline]
+pub(crate) fn ensure_u64_bit_len(bit_len: usize) -> Result<(), Error> {
+    if bit_len > U64_BIT_LEN {
+        Err(ErrorKind::BitLenNotInRange(bit_len as u64, 0, U64_BIT_LEN as u64).into())
+    } else {
+        Ok(())
+    }
+}
+
 pub trait BitRead {
     fn read_bit(&mut self) -> Result<bool, Error>;
 
@@ -34,6 +47,15 @@ pub trait BitRead {
         dst_bit_offset: usize,
         dst_bit_len: usize,
     ) -> Result<(), Error>;
+
+    /// Reads `bit_len <= 64` bits into the least significant bits of the result.
+    #[inline]
+    fn read_bits_u64(&mut self, bit_len: usize) -> Result<u64, Error> {
+        ensure_u64_bit_len(bit_len)?;
+        let mut bytes = [0u8; core::mem::size_of::<u64>()];
+        self.read_bits_with_offset(&mut bytes, U64_BIT_LEN - bit_len)?;
+        Ok(u64::from_be_bytes(bytes))
+    }
 }
 
 pub trait ScopedBitRead: BitRead {
@@ -94,19 +116,17 @@ impl<T: BitRead> PackedRead for T {
 
         if let Some((lower, upper)) = range {
             let range = upper.saturating_sub(lower);
-            let offset_bits = range.leading_zeros() as usize;
-            let mut bytes = [0u8; std::mem::size_of::<u64>()];
-            self.read_bits_with_offset(&mut bytes, offset_bits)?;
-            Ok(lower + u64::from_be_bytes(bytes))
+            let bit_len = U64_BIT_LEN - range.leading_zeros() as usize;
+            Ok(lower + self.read_bits_u64(bit_len)?)
         } else {
-            let mut bytes = [0u8; std::mem::size_of::<u64>()];
             let length = self.read_length_determinant(None, None)? as usize;
-
-            if let Some(offset) = bytes.len().checked_sub(length) {
-                self.read_bits(&mut bytes[offset..])?;
-                Ok(u64::from_be_bytes(bytes))
+            if length <= core::mem::size_of::<u64>() {
+                self.read_bits_u64(length * BYTE_LEN)
             } else {
-                Err(Error::length_determinant_exceeds_limit(length, bytes.len()))
+                Err(Error::length_determinant_exceeds_limit(
+                    length,
+                    core::mem::size_of::<u64>(),
+                ))
             }
         }
     }
@@ -114,32 +134,14 @@ impl<T: BitRead> PackedRead for T {
     /// ITU-T X.691 | ISO/IEC 8825-2:2015, chapter 11.4
     #[inline]
     fn read_2s_compliment_binary_integer(&mut self, bit_len: u64) -> Result<i64, Error> {
-        let mut bytes = [0u8; std::mem::size_of::<i64>()];
-
-        if bit_len == 0 || bit_len as usize > bytes.len() * BYTE_LEN {
-            return Err(ErrorKind::BitLenNotInRange(
-                bit_len,
-                1_u64,
-                (bytes.len() * BYTE_LEN) as u64,
-            )
-            .into());
+        if bit_len == 0 || bit_len > U64_BIT_LEN as u64 {
+            return Err(ErrorKind::BitLenNotInRange(bit_len, 1_u64, U64_BIT_LEN as u64).into());
         }
 
-        let bits_offset = (bytes.len() * BYTE_LEN) - bit_len as usize;
-        self.read_bits_with_offset(&mut bytes, bits_offset)?;
-        let byte_offset = bits_offset / BYTE_LEN;
-        let bit_offset = bits_offset % BYTE_LEN;
-        // check if the most significant bit is set (2er compliment -> negative number)
-        if bytes[byte_offset] & (0x80 >> bit_offset) != 0 {
-            // negative number, needs to be expanded before converting
-            for byte in bytes.iter_mut().take(byte_offset) {
-                *byte = 0xFF;
-            }
-            for i in 0..bit_offset {
-                bytes[byte_offset] |= 0x80 >> i;
-            }
-        }
-        Ok(i64::from_be_bytes(bytes))
+        let unused_bits = U64_BIT_LEN - bit_len as usize;
+        let value = self.read_bits_u64(bit_len as usize)?;
+        // sign extend from the most significant bit that was read
+        Ok(((value << unused_bits) as i64) >> unused_bits)
     }
 
     /// ITU-T X.691 | ISO/IEC 8825-2:2015, chapter 11.5
@@ -226,9 +228,8 @@ impl<T: BitRead> PackedRead for T {
                 self.read_non_negative_binary_integer(None, Some(LENGTH_16K - 1))
             } else {
                 // 11.9.3.8: chunks of 16k multiples
-                let mut multiple = [0u8; 1];
-                self.read_bits_with_offset(&mut multiple[..], 2)?;
-                Ok(LENGTH_16K * u64::from(multiple[0].min(MAX_FRAGMENTS)))
+                let multiple = self.read_bits_u64(6)?;
+                Ok(LENGTH_16K * multiple.min(u64::from(MAX_FRAGMENTS)))
             }
         }
     }
@@ -398,6 +399,13 @@ pub trait BitWrite {
         src_bit_offset: usize,
         src_bit_len: usize,
     ) -> Result<(), Error>;
+
+    /// Writes the `bit_len <= 64` least significant bits of `value`.
+    #[inline]
+    fn write_bits_u64(&mut self, value: u64, bit_len: usize) -> Result<(), Error> {
+        ensure_u64_bit_len(bit_len)?;
+        self.write_bits_with_offset(&value.to_be_bytes(), U64_BIT_LEN - bit_len)
+    }
 }
 
 impl<T: BitWrite> PackedWrite for T {
@@ -425,16 +433,12 @@ impl<T: BitWrite> PackedWrite for T {
 
         if let Some((lower, upper)) = range {
             let range = upper - lower;
-            let offset_bits = range.leading_zeros() as usize;
-            let bytes = (value - lower).to_be_bytes();
-            self.write_bits_with_offset(&bytes[..], offset_bits)?;
-            Ok(())
+            let bit_len = U64_BIT_LEN - range.leading_zeros() as usize;
+            self.write_bits_u64(value - lower, bit_len)
         } else {
-            let offset = value.leading_zeros() as u64 / 8;
-            let len = std::mem::size_of::<u64>() as u64 - offset;
-            let bytes = value.to_be_bytes();
-            self.write_length_determinant(None, None, len)?;
-            self.write_bits(&bytes[offset as usize..])
+            let len = core::mem::size_of::<u64>() - value.leading_zeros() as usize / BYTE_LEN;
+            self.write_length_determinant(None, None, len as u64)?;
+            self.write_bits_u64(value, len * BYTE_LEN)
         }
     }
 
@@ -445,9 +449,7 @@ impl<T: BitWrite> PackedWrite for T {
         bit_len: u64,
         value: i64,
     ) -> Result<(), Error> {
-        let bytes = value.to_be_bytes();
-        let bits_offset = (bytes.len() * BYTE_LEN) - bit_len as usize;
-        self.write_bits_with_offset(&bytes[..], bits_offset)
+        self.write_bits_u64(value as u64, bit_len as usize)
     }
 
     /// ITU-T X.691 | ISO/IEC 8825-2:2015, chapter 11.5
@@ -578,7 +580,7 @@ impl<T: BitWrite> PackedWrite for T {
                 self.write_bit(true)?;
                 self.write_bit(true)?;
                 let multiple = ((value / LENGTH_16K) as u8).min(MAX_FRAGMENTS);
-                self.write_bits_with_offset(&[multiple], 2)?;
+                self.write_bits_u64(u64::from(multiple), 6)?;
                 Ok(Some(u64::from(multiple) * LENGTH_16K))
             }
         }

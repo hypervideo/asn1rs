@@ -177,6 +177,11 @@ impl BitRead for BitBuffer {
             dst_bit_len,
         )
     }
+
+    #[inline]
+    fn read_bits_u64(&mut self, bit_len: usize) -> Result<u64, Error> {
+        BitRead::read_bits_u64(&mut (&self.buffer[..], &mut self.read_position), bit_len)
+    }
 }
 
 impl BitWrite for BitBuffer {
@@ -225,6 +230,18 @@ impl BitWrite for BitBuffer {
             src,
             src_bit_offset,
             src_bit_len,
+        )
+    }
+
+    #[inline]
+    fn write_bits_u64(&mut self, value: u64, bit_len: usize) -> Result<(), Error> {
+        // check before growing the buffer by an unreasonable `bit_len`
+        ensure_u64_bit_len(bit_len)?;
+        self.ensure_can_write_additional_bits(bit_len);
+        BitWrite::write_bits_u64(
+            &mut (&mut self.buffer[..], &mut self.write_position),
+            value,
+            bit_len,
         )
     }
 }
@@ -304,6 +321,11 @@ impl BitRead for Bits<'_> {
             dst_bit_offset,
             dst_bit_len,
         )
+    }
+
+    #[inline]
+    fn read_bits_u64(&mut self, bit_len: usize) -> Result<u64, Error> {
+        BitRead::read_bits_u64(&mut (self.slice, &mut self.pos), bit_len)
     }
 }
 
@@ -995,5 +1017,143 @@ pub mod tests {
         assert_eq!(2, read_once(&[0x80], 8, 2)?);
         assert_eq!(3, read_once(&[0x81], 8, 2)?);
         Ok(())
+    }
+
+    /// Forwards only the required methods, so that the default implementations of the provided
+    /// methods are used.
+    struct DefaultMethods<T>(T);
+
+    impl BitWrite for DefaultMethods<&mut BitBuffer> {
+        fn write_bit(&mut self, bit: bool) -> Result<(), Error> {
+            self.0.write_bit(bit)
+        }
+
+        fn write_bits(&mut self, src: &[u8]) -> Result<(), Error> {
+            self.0.write_bits(src)
+        }
+
+        fn write_bits_with_offset(&mut self, src: &[u8], offset: usize) -> Result<(), Error> {
+            self.0.write_bits_with_offset(src, offset)
+        }
+
+        fn write_bits_with_len(&mut self, src: &[u8], len: usize) -> Result<(), Error> {
+            self.0.write_bits_with_len(src, len)
+        }
+
+        fn write_bits_with_offset_len(
+            &mut self,
+            src: &[u8],
+            offset: usize,
+            len: usize,
+        ) -> Result<(), Error> {
+            self.0.write_bits_with_offset_len(src, offset, len)
+        }
+    }
+
+    impl BitRead for DefaultMethods<Bits<'_>> {
+        fn read_bit(&mut self) -> Result<bool, Error> {
+            self.0.read_bit()
+        }
+
+        fn read_bits(&mut self, dst: &mut [u8]) -> Result<(), Error> {
+            self.0.read_bits(dst)
+        }
+
+        fn read_bits_with_offset(&mut self, dst: &mut [u8], offset: usize) -> Result<(), Error> {
+            self.0.read_bits_with_offset(dst, offset)
+        }
+
+        fn read_bits_with_len(&mut self, dst: &mut [u8], len: usize) -> Result<(), Error> {
+            self.0.read_bits_with_len(dst, len)
+        }
+
+        fn read_bits_with_offset_len(
+            &mut self,
+            dst: &mut [u8],
+            offset: usize,
+            len: usize,
+        ) -> Result<(), Error> {
+            self.0.read_bits_with_offset_len(dst, offset, len)
+        }
+    }
+
+    const U64_FIELDS: [(u64, usize); 10] = [
+        (0b101, 3),
+        (0, 0),
+        (0xFFFF_FFFF_FFFF_FFFF, 64),
+        (0x1234, 16),
+        (1, 1),
+        // bits beyond `bit_len` are ignored
+        (0xFFFF_FF00 | 0x5A, 7),
+        (0x7FFF_FFFF_FFFF_FFFF, 63),
+        (0x2A, 6),
+        (0x0123_4567_89AB_CDEF, 64),
+        (0x3_FFFF, 18),
+    ];
+
+    fn low_bits(value: u64, bit_len: usize) -> u64 {
+        if bit_len == 0 {
+            0
+        } else {
+            value & (u64::MAX >> (64 - bit_len))
+        }
+    }
+
+    #[test]
+    fn bit_buffer_u64_bits_match_default_methods() -> Result<(), Error> {
+        let mut native = BitBuffer::default();
+        let mut default = BitBuffer::default();
+        for (value, bit_len) in U64_FIELDS {
+            native.write_bits_u64(value, bit_len)?;
+            DefaultMethods(&mut default).write_bits_u64(value, bit_len)?;
+        }
+        assert_eq!(default.content(), native.content());
+        assert_eq!(default.bit_len(), native.bit_len());
+
+        let mut bits = Bits::from(&native);
+        let mut default_bits = DefaultMethods(Bits::from(&native));
+        for (value, bit_len) in U64_FIELDS {
+            assert_eq!(low_bits(value, bit_len), bits.read_bits_u64(bit_len)?);
+            assert_eq!(
+                low_bits(value, bit_len),
+                default_bits.read_bits_u64(bit_len)?
+            );
+        }
+        assert_eq!(0, bits.remaining());
+
+        for (value, bit_len) in U64_FIELDS {
+            assert_eq!(low_bits(value, bit_len), native.read_bits_u64(bit_len)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_u64_bits_reject_invalid_lengths() {
+        let mut buffer = BitBuffer::default();
+        assert_eq!(
+            Err(ErrorKind::BitLenNotInRange(65, 0, 64).into()),
+            buffer.write_bits_u64(0, 65)
+        );
+        assert_eq!(0, buffer.byte_len());
+
+        buffer.write_bits_u64(0x7F, 7).unwrap();
+        let mut bits = Bits::from(&buffer);
+        assert_eq!(
+            Err(ErrorKind::BitLenNotInRange(65, 0, 64).into()),
+            bits.read_bits_u64(65)
+        );
+        assert_eq!(
+            Err(Error::insufficient_data_in_source_buffer()),
+            bits.read_bits_u64(9)
+        );
+        assert_eq!(Ok(0x7F), bits.read_bits_u64(7));
+
+        let mut slice = [0u8; 1];
+        let mut pos = 2;
+        assert_eq!(
+            Err(Error::insufficient_space_in_destination_buffer()),
+            (&mut slice[..], &mut pos).write_bits_u64(0, 7)
+        );
+        assert_eq!(2, pos);
     }
 }
