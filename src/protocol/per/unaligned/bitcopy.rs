@@ -124,13 +124,21 @@ fn store_be(dst: &mut [u8], index: usize, shift: usize, len: usize, value: u64) 
     let unused = WORD_LEN - shift - len;
     let mask = (u64::MAX >> (WORD_LEN - len)) << unused;
     let bits = (value << unused) & mask;
-    match dst.get_mut(index..index + 8) {
+    // WebAssembly has no byte swap instruction, so loading and storing a big endian word takes
+    // more instructions there than touching the bytes of the range one by one.
+    let word = if cfg!(target_arch = "wasm32") {
+        None
+    } else {
+        dst.get_mut(index..index + 8)
+    };
+    match word {
         Some(bytes) => {
             let bytes: &mut [u8; 8] = bytes.try_into().unwrap();
             *bytes = ((u64::from_be_bytes(*bytes) & !mask) | bits).to_be_bytes();
         }
         None => {
-            // near the end of `dst`, only touch the bytes that hold bits of the range
+            // near the end of `dst` (or on wasm32), only touch the bytes that hold bits of the
+            // range
             let touched = (shift + len).div_ceil(BYTE_LEN);
             for (i, byte) in dst[index..index + touched].iter_mut().enumerate() {
                 let byte_shift = 56 - 8 * i;
