@@ -10,11 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
  - Implement `UperReader::into_bits` ([aa6b083], [gh-82], [@jkalez])
  - Derive `Clone` for `UperReader` ([d6c5d18], [gh-83], [@jkalez])
+ - `BitRead::read_bits_u64` and `BitWrite::write_bits_u64` to read and write up to 64 bits as an
+   integer, with default implementations for existing implementors of the traits
+ - UPER benchmark in `benches/uper.rs`, which also runs on `wasm32-wasip1`
 ### Changed
  - Implement UperReader for ScopedBitReader over Bits ([aa6b083], [gh-81], [@jkalez])
+ - Faster UPER encoding and decoding, see [PERFORMANCE.md](PERFORMANCE.md): bit copies word
+   at a time, vector kernels for unaligned bulk copies (SSE2, NEON, and `simd128` when compiling
+   for wasm32 with `-C target-feature=+simd128`), integers without a detour through byte arrays,
+   and zeroed slack after the content of a `BitBuffer`
+ - Copying a bit range keeps the destination bits after the range. Before, copies of more than
+   16 bits between different bit offsets within a byte cleared the rest of the last destination
+   byte
 ### Deprecated
 ### Removed
 ### Fixed
+ - Reading a bit at the end of a `(&[u8], &mut usize)` returns `EndOfStream` instead of panicking
+ - `write_2s_compliment_binary_integer` returns an error for bit lengths above 64 instead of
+   underflowing
 ### Security
 
 [@jkalez]: https://github.com/jkalez
