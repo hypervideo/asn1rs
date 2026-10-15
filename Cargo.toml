@@ -55,3 +55,8 @@ descriptive-deserialize-errors = []
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[bench]]
+name = "uper"
+harness = false
+required-features = ["macros"]
