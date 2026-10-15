@@ -36,6 +36,7 @@ The changes so far:
 | 4 | Read and write integers as `u64` instead of byte arrays |
 | 5 | Shift unaligned bit copies with SSE2, NEON and simd128 |
 | 6 | Return `EndOfStream` when reading a bit past the end of a slice (a fix, no speedup) |
+| – | Benchmark writing integers into a fixed slice (adds a benchmark, no code change) |
 
 The encoded bytes do not change. After every change, a differential test encoded 4000 random
 datagrams and 4000 random string sequences (about 11.7 MB of output) and compared the output byte
@@ -63,6 +64,8 @@ unaligned bit positions.
 | `strings/profile` | Three `UTF8String`s, two of them optional, and a 58 character `IA5String` |
 | `bits/{write,read}_unaligned_*` | Copying 16, 1200 or 16000 bytes to or from bit offset 3 of a `BitBuffer` or `Bits` |
 | `fields/{write,read}_256_mixed_ints` | 192 constrained integers, 32 booleans and 32 unconstrained integers, written to a `BitBuffer` or read from `Bits` |
+
+| `fields/write_256_mixed_ints_slice` | The same writes into a fixed `(&mut [u8], &mut usize)`, which excludes the cost of growing a `BitBuffer` |
 
 ### The machine and the four configurations
 
@@ -355,6 +358,20 @@ code layout:
 | `fields/write_256_mixed_ints` | 943 → 938 | 1.00× | 1.00× | 1.01× | 0.98× |
 | `fields/read_256_mixed_ints` | 147 → 148 | 0.99× | 1.00× | 1.01× | 1.01× |
 
+### Benchmark: writing into a fixed slice
+
+`fields/write_256_mixed_ints_slice` does the same writes as `fields/write_256_mixed_ints`, but into
+a pre-sized `(&mut [u8], &mut usize)`, which excludes the cost of growing a `BitBuffer`. Measured
+on arm64 for every commit so far:
+
+| Benchmark | original | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `fields/write_256_mixed_ints` | 1,786 | 1,537 | 1,340 | 1,345 | 933 | 943 | 938 |
+| `fields/write_256_mixed_ints_slice` | 1,106 | 789 | 792 | 795 | 685 | 683 | 684 |
+
+After change 6, writing into the `BitBuffer` takes 1.37× as long as writing into the slice. The
+appendix lists the other configurations.
+
 ## Experiments that did not pay off
 
 ### Word-aligned store windows
@@ -502,6 +519,7 @@ original code to the last change.
 | `bits/write_unaligned_16000` | 8,419 | 430 | 436 | 428 | 430 | 343 | 342 | 24.59× |
 | `bits/read_unaligned_16000` | 8,304 | 298 | 299 | 300 | 298 | 222 | 217 | 38.25× |
 | `fields/write_256_mixed_ints` | 1,786 | 1,537 | 1,340 | 1,345 | 933 | 943 | 938 | 1.90× |
+| `fields/write_256_mixed_ints_slice` | 1,106 | 789 | 792 | 795 | 685 | 683 | 684 | 1.62× |
 | `fields/read_256_mixed_ints` | 1,945 | 297 | 310 | 306 | 149 | 147 | 148 | 13.16× |
 
 ### x86_64 (Rosetta)
@@ -527,6 +545,7 @@ original code to the last change.
 | `bits/write_unaligned_16000` | 21,371 | 956 | 946 | 951 | 948 | 949 | 947 | 22.56× |
 | `bits/read_unaligned_16000` | 21,203 | 818 | 815 | 819 | 819 | 819 | 819 | 25.88× |
 | `fields/write_256_mixed_ints` | 3,659 | 3,061 | 2,120 | 2,503 | 1,578 | 1,581 | 1,583 | 2.31× |
+| `fields/write_256_mixed_ints_slice` | 2,348 | 1,444 | 1,369 | 1,416 | 1,370 | 1,361 | 1,367 | 1.72× |
 | `fields/read_256_mixed_ints` | 4,752 | 545 | 373 | 436 | 279 | 282 | 283 | 16.80× |
 
 ### wasm32
@@ -552,6 +571,7 @@ original code to the last change.
 | `bits/write_unaligned_16000` | 12,831 | 1,083 | 1,075 | 1,074 | 1,087 | 1,084 | 1,092 | 11.75× |
 | `bits/read_unaligned_16000` | 12,721 | 949 | 949 | 943 | 964 | 953 | 949 | 13.40× |
 | `fields/write_256_mixed_ints` | 4,332 | 2,371 | 2,201 | 2,226 | 1,809 | 1,836 | 1,816 | 2.39× |
+| `fields/write_256_mixed_ints_slice` | 2,741 | 1,585 | 1,578 | 1,574 | 1,532 | 1,534 | 1,528 | 1.79× |
 | `fields/read_256_mixed_ints` | 2,900 | 610 | 612 | 614 | 442 | 446 | 439 | 6.60× |
 
 ### wasm32 +simd128
@@ -577,6 +597,7 @@ original code to the last change.
 | `bits/write_unaligned_16000` | 12,814 | 585 | 585 | 586 | 586 | 539 | 537 | 23.85× |
 | `bits/read_unaligned_16000` | 12,702 | 449 | 449 | 450 | 449 | 404 | 404 | 31.45× |
 | `fields/write_256_mixed_ints` | 4,345 | 2,542 | 2,478 | 2,459 | 1,798 | 1,825 | 1,864 | 2.33× |
+| `fields/write_256_mixed_ints_slice` | 2,733 | 1,746 | 1,741 | 1,743 | 1,531 | 1,534 | 1,520 | 1.80× |
 | `fields/read_256_mixed_ints` | 2,927 | 615 | 616 | 616 | 436 | 435 | 430 | 6.81× |
 
 ### `opt-level = "s"`
@@ -606,6 +627,7 @@ The medians from change 4, the last one before the vector kernels, on.
 | `bits/write_unaligned_16000` | 3,844 | 355 |
 | `bits/read_unaligned_16000` | 3,725 | 214 |
 | `fields/write_256_mixed_ints` | 1,316 | 1,282 |
+| `fields/write_256_mixed_ints_slice` | 674 | 682 |
 | `fields/read_256_mixed_ints` | 150 | 151 |
 
 #### x86_64 (Rosetta)
@@ -631,6 +653,7 @@ The medians from change 4, the last one before the vector kernels, on.
 | `bits/write_unaligned_16000` | 4,901 | 957 |
 | `bits/read_unaligned_16000` | 4,669 | 817 |
 | `fields/write_256_mixed_ints` | 2,217 | 2,462 |
+| `fields/write_256_mixed_ints_slice` | 1,355 | 1,354 |
 | `fields/read_256_mixed_ints` | 203 | 204 |
 
 #### wasm32 +simd128
@@ -656,4 +679,5 @@ The medians from change 4, the last one before the vector kernels, on.
 | `bits/write_unaligned_16000` | 7,609 | 548 |
 | `bits/read_unaligned_16000` | 7,474 | 404 |
 | `fields/write_256_mixed_ints` | 2,592 | 2,596 |
+| `fields/write_256_mixed_ints_slice` | 1,524 | 1,522 |
 | `fields/read_256_mixed_ints` | 454 | 450 |
