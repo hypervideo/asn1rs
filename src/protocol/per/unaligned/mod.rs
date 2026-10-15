@@ -1,6 +1,7 @@
 use crate::protocol::per::{Error, ErrorKind};
 use crate::protocol::per::{PackedRead, PackedWrite};
 
+mod bitcopy;
 pub mod buffer;
 pub mod slice;
 
