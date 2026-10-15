@@ -3,6 +3,7 @@ use crate::protocol::per::{PackedRead, PackedWrite};
 
 mod bitcopy;
 pub mod buffer;
+mod simd;
 pub mod slice;
 
 pub const BYTE_LEN: usize = 8;
