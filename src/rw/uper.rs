@@ -306,7 +306,7 @@ impl UperWriter {
     pub fn into_bytes_vec(self) -> Vec<u8> {
         debug_assert_eq!(
             (self.bit_len() + BYTE_LEN - 1) / BYTE_LEN,
-            self.bits.buffer.len()
+            self.bits.byte_len()
         );
         self.bits.into()
     }
