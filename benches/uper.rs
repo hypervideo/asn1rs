@@ -332,6 +332,30 @@ fn main() {
                 .unwrap();
         }
     });
+    // The same writes into a fixed slice, which excludes the cost of growing a `BitBuffer`.
+    let mut slice = vec![0u8; 1024];
+    bench.run("fields/write_256_mixed_ints_slice", None, || {
+        let mut pos = 0usize;
+        let mut w = (&mut slice[..], &mut pos);
+        for i in 0..32u64 {
+            w.write_constrained_whole_number(0, 7, (i % 8) as i64)
+                .unwrap();
+            w.write_constrained_whole_number(0, 65_535, (i * 1_000) as i64)
+                .unwrap();
+            w.write_constrained_whole_number(-524_288, 524_287, i as i64 - 9)
+                .unwrap();
+            w.write_constrained_whole_number(0, 274_877_906_943, (i << 30) as i64)
+                .unwrap();
+            w.write_constrained_whole_number(0, i64::MAX, (i << 50) as i64)
+                .unwrap();
+            w.write_constrained_whole_number(0, 16_777_215, (i << 18) as i64)
+                .unwrap();
+            w.write_bit(i % 3 == 0).unwrap();
+            w.write_unconstrained_whole_number(i as i64 * 100_003)
+                .unwrap();
+        }
+        pos
+    });
     let ints = buffer.content().to_vec();
     bench.run("fields/read_256_mixed_ints", None, || {
         let mut bits = Bits::from(black_box(&ints[..]));
