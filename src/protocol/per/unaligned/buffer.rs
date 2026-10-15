@@ -105,12 +105,11 @@ impl BitBuffer {
         result
     }
 
+    #[inline]
     pub fn ensure_can_write_additional_bits(&mut self, bit_len: usize) {
-        if self.write_position + bit_len >= self.buffer.len() * BYTE_LEN {
-            let required_len = ((self.write_position + bit_len) + 7) / BYTE_LEN;
-            let extend_by_len = required_len - self.buffer.len();
-            self.buffer
-                .extend(core::iter::repeat(0u8).take(extend_by_len))
+        let required_len = (self.write_position + bit_len).div_ceil(BYTE_LEN);
+        if required_len > self.buffer.len() {
+            self.buffer.resize(required_len, 0);
         }
     }
 }
