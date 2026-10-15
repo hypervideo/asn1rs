@@ -1,4 +1,5 @@
-use super::bitcopy::copy_bits;
+use super::bitcopy::{copy_bits, read_u64, write_u64};
+use super::ensure_u64_bit_len;
 use super::BitRead;
 use crate::protocol::per::unaligned::BitWrite;
 use crate::protocol::per::unaligned::BYTE_LEN;
@@ -45,6 +46,17 @@ impl BitRead for (&[u8], &mut usize) {
         *self.1 += dst_bit_len;
         Ok(())
     }
+
+    #[inline]
+    fn read_bits_u64(&mut self, bit_len: usize) -> Result<u64, Error> {
+        ensure_u64_bit_len(bit_len)?;
+        if self.0.len() * BYTE_LEN < *self.1 + bit_len {
+            return Err(Error::insufficient_data_in_source_buffer());
+        }
+        let value = read_u64(self.0, *self.1, bit_len);
+        *self.1 += bit_len;
+        Ok(value)
+    }
 }
 
 impl<'a> BitWrite for (&'a mut [u8], &mut usize) {
@@ -86,6 +98,17 @@ impl<'a> BitWrite for (&'a mut [u8], &mut usize) {
     ) -> Result<(), Error> {
         copy_bits(src, src_bit_offset, self.0, *self.1, src_bit_len)?;
         *self.1 += src_bit_len;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_bits_u64(&mut self, value: u64, bit_len: usize) -> Result<(), Error> {
+        ensure_u64_bit_len(bit_len)?;
+        if self.0.len() * BYTE_LEN < *self.1 + bit_len {
+            return Err(Error::insufficient_space_in_destination_buffer());
+        }
+        write_u64(self.0, *self.1, bit_len, value);
+        *self.1 += bit_len;
         Ok(())
     }
 }
