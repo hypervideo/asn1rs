@@ -90,10 +90,21 @@ asn_to_rust!(
         transportFeedback TransportFeedbackDatagram
     }
 
-    -- The media data of a fragment, which runs from the octet boundary after the metadata to the
-    -- end of the datagram
+    -- The fields of `VideoFragmentDatagramMetadata` and the media data of the fragment, which
+    -- runs from the octet boundary after the fields to the end of the datagram
     VideoFragmentDatagram ::= SEQUENCE {
-        metadata VideoFragmentDatagramMetadata,
+        header DatagramHeader,
+        participantId ParticipantId,
+        streamId StreamId,
+        trackId TrackId,
+        keyFrame BOOLEAN,
+        senderSequenceNumber INTEGER (0..65535),
+        sendAttemptNumber INTEGER (0..15),
+        timingInfo TimingInfo,
+        totalDataSize INTEGER (0..268435455),
+        fragmentSize INTEGER (1..1791),
+        fragmentNumber INTEGER (0..262143),
+        metadata VideoFragmentMetadata,
         data [PER: TRAILING] OCTET STRING
     }
 
@@ -170,8 +181,30 @@ pub enum SharedClientRelayDatagram {
 #[asn(sequence)]
 #[derive(Debug, PartialEq)]
 pub struct SharedVideoFragmentDatagram {
-    #[asn(complex(VideoFragmentDatagramMetadata, tag(UNIVERSAL(16))))]
-    pub metadata: VideoFragmentDatagramMetadata,
+    #[asn(complex(DatagramHeader, tag(UNIVERSAL(16))))]
+    pub header: DatagramHeader,
+    #[asn(complex(ParticipantId, tag(UNIVERSAL(2))))]
+    pub participant_id: ParticipantId,
+    #[asn(complex(StreamId, tag(UNIVERSAL(2))))]
+    pub stream_id: StreamId,
+    #[asn(complex(TrackId, tag(UNIVERSAL(2))))]
+    pub track_id: TrackId,
+    #[asn(boolean)]
+    pub key_frame: bool,
+    #[asn(integer(0..65535))]
+    pub sender_sequence_number: u16,
+    #[asn(integer(0..15))]
+    pub send_attempt_number: u8,
+    #[asn(complex(TimingInfo, tag(UNIVERSAL(16))))]
+    pub timing_info: TimingInfo,
+    #[asn(integer(0..268435455))]
+    pub total_data_size: u32,
+    #[asn(integer(1..1791))]
+    pub fragment_size: u16,
+    #[asn(integer(0..262143))]
+    pub fragment_number: u32,
+    #[asn(complex(VideoFragmentMetadata, tag(UNIVERSAL(16))))]
+    pub metadata: VideoFragmentMetadata,
     #[asn(octet_string(trailing))]
     pub data: bytes::Bytes,
 }
@@ -328,8 +361,33 @@ fn main() {
             },
         );
 
+        let VideoFragmentDatagramMetadata {
+            header,
+            participant_id,
+            stream_id,
+            track_id,
+            key_frame,
+            sender_sequence_number,
+            send_attempt_number,
+            timing_info,
+            total_data_size,
+            fragment_size,
+            fragment_number,
+            metadata: fragment_metadata,
+        } = metadata.clone();
         let trailing_vec = ClientRelayDatagramWithData::VideoFragment(VideoFragmentDatagram {
-            metadata: metadata.clone(),
+            header,
+            participant_id,
+            stream_id,
+            track_id,
+            key_frame,
+            sender_sequence_number,
+            send_attempt_number,
+            timing_info,
+            total_data_size,
+            fragment_size,
+            fragment_number,
+            metadata: fragment_metadata,
             data: data.to_vec(),
         });
         let trailing_vec_encode = || {
@@ -349,9 +407,34 @@ fn main() {
             || decode::<ClientRelayDatagramWithData>(black_box(&append_bytes)),
         );
 
+        let VideoFragmentDatagramMetadata {
+            header,
+            participant_id,
+            stream_id,
+            track_id,
+            key_frame,
+            sender_sequence_number,
+            send_attempt_number,
+            timing_info,
+            total_data_size,
+            fragment_size,
+            fragment_number,
+            metadata: fragment_metadata,
+        } = metadata;
         let trailing_bytes =
             SharedClientRelayDatagram::VideoFragment(SharedVideoFragmentDatagram {
-                metadata,
+                header,
+                participant_id,
+                stream_id,
+                track_id,
+                key_frame,
+                sender_sequence_number,
+                send_attempt_number,
+                timing_info,
+                total_data_size,
+                fragment_size,
+                fragment_number,
+                metadata: fragment_metadata,
                 data: data.clone(),
             });
         let trailing_bytes_encode = || {

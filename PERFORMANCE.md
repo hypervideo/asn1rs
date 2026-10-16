@@ -40,6 +40,7 @@ The changes so far:
 | 7 | Keep zeroed slack after the content of a `BitBuffer` |
 | 8 | Store bits byte-wise on wasm32 |
 | 9 | Add the PER encoding instruction `[PER: TRAILING]` for `OCTET STRING` (a feature, no speedup) |
+| – | Benchmark `[PER: TRAILING]` with the fields of the appending variant (changes a benchmark, no code change) |
 
 The encoded bytes do not change. After every change, a differential test encoded 4000 random
 datagrams and 4000 random string sequences (about 11.7 MB of output) and compared the output byte
@@ -482,8 +483,9 @@ x86_64 and wasm32, it encodes 12–16 ns (5–7%) slower, which on x86_64 is wit
 The writer gets enough capacity for the whole datagram, but `BitBuffer` fills the space it grows
 into with zeros before the data is copied there, which appending avoids. That zero fill is the
 likely cause, but it was not measured separately. On wasm32, decoding into `Bytes` is 13–14 ns
-(7–8%) slower than slicing, for a reason not investigated yet. Decoding into a `Vec<u8>` copies the
-data and takes 40–70 ns longer than into a `Bytes`.
+(7–8%) slower than slicing, which mostly came from the benchmark (see
+[Benchmark: `[PER: TRAILING]` with the fields of `append`](#benchmark-per-trailing-with-the-fields-of-append)).
+Decoding into a `Vec<u8>` copies the data and takes 40–70 ns longer than into a `Bytes`.
 
 Encodings without `[PER: TRAILING]` do not change: a differential test encoded and decoded 4000
 random datagrams and 4000 random string sequences of the benchmark schema (3.6 MB of output) with
@@ -510,6 +512,26 @@ Every value that a `UperWriter` writes now first checks whether an `OCTET STRING
 `bits/read_unaligned_1200` and `fields/write_256_mixed_ints` do not run any changed code, but were
 slower on arm64 in all three runs, so the 0.88× and 0.95× come from the code layout. The appendix
 lists all benchmarks.
+
+### Benchmark: `[PER: TRAILING]` with the fields of `append`
+
+The `trailing_*` variants of `datagram/video_fragment_1200` nested the fields of
+`VideoFragmentDatagramMetadata` in a `SEQUENCE` of their own, which costs a scope for every
+encoding and decoding. Like `append` and the datagrams of a real media transport, they now have the
+fields and the data in one `SEQUENCE`, so that the variants differ in their data only. With the
+code of change 9, nested → flat:
+
+| Benchmark | arm64 | x86_64 (Rosetta) | wasm32 | wasm32 +simd128 |
+|---|---:|---:|---:|---:|
+| `datagram/video_fragment_1200/append/encode` | 134 → 134 | 211 → 217 | 232 → 229 | 228 → 227 |
+| `datagram/video_fragment_1200/trailing_vec/encode` | 125 → 122 | 226 → 220 | 244 → 242 | 239 → 238 |
+| `datagram/video_fragment_1200/trailing_bytes/encode` | 125 → 122 | 231 → 226 | 244 → 240 | 241 → 238 |
+| `datagram/video_fragment_1200/append/decode` | 86.8 → 86.3 | 135 → 136 | 183 → 183 | 178 → 177 |
+| `datagram/video_fragment_1200/trailing_vec/decode` | 147 → 140 | 210 → 211 | 235 → 232 | 232 → 228 |
+| `datagram/video_fragment_1200/trailing_bytes/decode` | 81.8 → 80.4 | 140 → 140 | 192 → 183 | 192 → 183 |
+
+`append` does not change. Without the nested `SEQUENCE`, decoding into `Bytes` takes as long as
+slicing, except on wasm32 +simd128, where it is 3% slower.
 
 ## Experiments that did not pay off
 
@@ -768,8 +790,6 @@ Without simd128, both read experiments showed the same speedups within five perc
 - `BitBuffer` zeroes the space it grows into, also when an aligned copy of many bytes will
   overwrite it right away. Encoding with `[PER: TRAILING]` is probably slower than appending on
   x86_64 and wasm32 because of that (see [change 9](#9-per-trailing)).
-- On wasm32, decoding from `SharedBits` is 7–8% slower than decoding from `Bits` and slicing the
-  data off.
 - On arm64, `fields/read_256_mixed_ints` takes 150 ns or 230–340 ns, depending on unrelated code in
   the benchmark binary (see [The series](#the-series)).
 
