@@ -136,6 +136,20 @@ impl BitBuffer {
         }
     }
 
+    /// Appends the bytes of `src` to the content, which ends at an octet boundary.
+    ///
+    /// Unlike growing the buffer and copying `src` into it, this does not zero the space for `src`
+    /// first.
+    #[inline(never)]
+    fn extend_content(&mut self, src: &[u8]) {
+        self.buffer.truncate(self.len);
+        self.buffer.extend_from_slice(src);
+        self.len = self.buffer.len();
+        self.write_position = self.len * BYTE_LEN;
+        let len_with_slack = (self.len + WRITE_SLACK).min(self.buffer.capacity());
+        self.buffer.resize(len_with_slack, 0);
+    }
+
     #[inline(never)]
     fn grow(&mut self, required_len: usize) {
         // Zero ahead, so that most writes neither need to grow the buffer nor store byte-wise at
@@ -242,6 +256,13 @@ impl BitWrite for BitBuffer {
 
     #[inline]
     fn write_bits(&mut self, src: &[u8]) -> Result<(), Error> {
+        // Whole bytes at the end of the content that do not fit into the zeroed slack
+        if self.write_position == self.len * BYTE_LEN
+            && self.len + src.len() + WRITE_SLACK > self.buffer.len()
+        {
+            self.extend_content(src);
+            return Ok(());
+        }
         self.ensure_can_write_additional_bits(src.len() * BYTE_LEN);
         BitWrite::write_bits(&mut (&mut self.buffer[..], &mut self.write_position), src)
     }
@@ -1245,6 +1266,39 @@ pub mod tests {
             .iter()
             .copied()
             .eq((0..capacity).map(|i| i as u8)));
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_write_bits_appends_whole_bytes_to_the_content() -> Result<(), Error> {
+        for (capacity, len) in [(0, 3), (0, 100), (4, 3), (1000, 100)] {
+            let src = (0..len).map(|i| i as u8 + 1).collect::<Vec<u8>>();
+            let mut buffer = BitBuffer::with_capacity(capacity);
+            buffer.write_bits_u64(0xAB, 8)?;
+            buffer.write_bits(&src)?;
+            buffer.write_bit(true)?;
+
+            let mut expected = vec![0xAB];
+            expected.extend_from_slice(&src);
+            expected.push(0b1000_0000);
+            assert_eq!(&expected[..], buffer.content(), "capacity {capacity}");
+            assert_eq!((len + 1) * 8 + 1, buffer.bit_len());
+            assert!(buffer.buffer[buffer.byte_len()..].iter().all(|b| *b == 0));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_write_bits_does_not_reallocate_when_the_capacity_fits_the_content(
+    ) -> Result<(), Error> {
+        let mut buffer = BitBuffer::with_capacity(101);
+        let capacity = buffer.buffer.capacity();
+        buffer.write_bits_u64(0xAB, 8)?;
+        buffer.write_bits(&[0x5A; 100])?;
+        assert_eq!(capacity, buffer.buffer.capacity());
+        assert_eq!(101, buffer.byte_len());
+        assert_eq!(0xAB, buffer.content()[0]);
+        assert!(buffer.content()[1..].iter().all(|b| *b == 0x5A));
         Ok(())
     }
 
