@@ -40,6 +40,7 @@ The crate can be used as standalone CLI binary or used as library through its AP
 | `OCTET STRING`      | ✔️ yes  | ✔️ yes | ✔️ yes     |
 | ...`SIZE(A..B)`     | ✔️ yes  | ✔️ yes | 🆗 ignored |
 | ...`SIZE(A..B,...)` | ✔️ yes  | ✔️ yes | 🆗 ignored |
+| ...`[PER: TRAILING]`³ | ✔️ yes | ✔️ yes | 🆗 ignored |
 | `UTF8String`        | ✔️ yes  | ✔️ yes | ✔️ yes     |
 | ...`SIZE(A..B)`     | ✔️ yes  | ✔️ yes | 🆗 ignored |
 | ...`SIZE(A..B,...)` | ✔️ yes  | ✔️ yes | 🆗 ignored |
@@ -82,6 +83,9 @@ The crate can be used as standalone CLI binary or used as library through its AP
  - 🆗 ignored: constraint is ignored but it does not break compatibility
  - ❌ ub: undefined behavior - whatever seems reasonable to prevent compiler errors and somehow transmit the value
  - 🟥 error: fails to compile / translate
+ - ³: a PER encoding instruction specific to asn1rs, not registered under ITU-T X.695: in UPER, the `OCTET STRING` starts at the next
+   octet boundary and extends to the end of the encoding, without a length determinant. With the `bytes` feature,
+   a `bytes::Bytes` field read through `SharedBits` refers to the input instead of copying it
 
 
 #### Supported standards

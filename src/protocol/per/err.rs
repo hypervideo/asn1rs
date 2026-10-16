@@ -101,6 +101,12 @@ pub enum ErrorKind {
     BitLenNotInRange(u64, u64, u64),
     OptFlagsExhausted,
     EndOfStream,
+    /// A value was written after an OCTET STRING with the PER encoding instruction
+    /// `[PER: TRAILING]`, which has to be the last thing in the encoding
+    TrailingOctetStringNotLast,
+    /// An OCTET STRING with the PER encoding instruction `[PER: TRAILING]` is part of an open type,
+    /// such as an extension addition, which is not supported
+    TrailingOctetStringInOpenType,
 }
 
 impl Error {
@@ -226,6 +232,14 @@ impl std::fmt::Display for ErrorKind {
                 f,
                 "Can no longer read or write any bytes from the underlying dataset"
             ),
+            Self::TrailingOctetStringNotLast => write!(
+                f,
+                "A value follows an OCTET STRING with [PER: TRAILING], which has to be the last value"
+            ),
+            Self::TrailingOctetStringInOpenType => write!(
+                f,
+                "An OCTET STRING with [PER: TRAILING] is not supported within an open type"
+            ),
         }
     }
 }
@@ -270,6 +284,10 @@ impl PartialEq for ErrorKind {
             }
             Self::OptFlagsExhausted => matches!(other, Self::OptFlagsExhausted),
             Self::EndOfStream => matches!(other, Self::EndOfStream),
+            Self::TrailingOctetStringNotLast => matches!(other, Self::TrailingOctetStringNotLast),
+            Self::TrailingOctetStringInOpenType => {
+                matches!(other, Self::TrailingOctetStringInOpenType)
+            }
         }
     }
 }
