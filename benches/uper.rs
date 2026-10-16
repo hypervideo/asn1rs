@@ -90,6 +90,19 @@ asn_to_rust!(
         transportFeedback TransportFeedbackDatagram
     }
 
+    -- The media data of a fragment, which runs from the octet boundary after the metadata to the
+    -- end of the datagram
+    VideoFragmentDatagram ::= SEQUENCE {
+        metadata VideoFragmentDatagramMetadata,
+        data [PER: TRAILING] OCTET STRING
+    }
+
+    ClientRelayDatagramWithData ::= CHOICE {
+        videoFragment VideoFragmentDatagram,
+        padding PaddingDatagram,
+        transportFeedback TransportFeedbackDatagram
+    }
+
     Profile ::= SEQUENCE {
         name UTF8String,
         initials UTF8String OPTIONAL,
@@ -137,6 +150,30 @@ fn video_fragment() -> ClientRelayDatagram {
             temporal_index: 2,
         },
     })
+}
+
+/// The same as [`ClientRelayDatagramWithData`], but it holds the data in a [`bytes::Bytes`].
+#[cfg(feature = "bytes")]
+#[asn(choice)]
+#[derive(Debug, PartialEq)]
+pub enum SharedClientRelayDatagram {
+    #[asn(complex(SharedVideoFragmentDatagram, tag(UNIVERSAL(16))))]
+    VideoFragment(SharedVideoFragmentDatagram),
+    #[asn(complex(PaddingDatagram, tag(UNIVERSAL(16))))]
+    Padding(PaddingDatagram),
+    #[asn(complex(TransportFeedbackDatagram, tag(UNIVERSAL(16))))]
+    TransportFeedback(TransportFeedbackDatagram),
+}
+
+/// The same as [`VideoFragmentDatagram`], but it holds the data in a [`bytes::Bytes`].
+#[cfg(feature = "bytes")]
+#[asn(sequence)]
+#[derive(Debug, PartialEq)]
+pub struct SharedVideoFragmentDatagram {
+    #[asn(complex(VideoFragmentDatagramMetadata, tag(UNIVERSAL(16))))]
+    pub metadata: VideoFragmentDatagramMetadata,
+    #[asn(octet_string(trailing))]
+    pub data: bytes::Bytes,
 }
 
 fn padding(len: usize) -> ClientRelayDatagram {
@@ -226,7 +263,7 @@ impl Bench {
         let throughput = bytes
             .map(|b| format!("{:>9.2} GiB/s", b as f64 / median / 1.073_741_824))
             .unwrap_or_default();
-        println!("{name:<40} {median:>12.1} ns {min:>12.1} ns (min) {throughput}");
+        println!("{name:<50} {median:>12.1} ns {min:>12.1} ns (min) {throughput}");
     }
 }
 
@@ -242,7 +279,7 @@ fn main() {
         .unwrap_or(Duration::from_millis(500));
     let bench = Bench { filter, target };
 
-    println!("{:<40} {:>15} {:>21}", "benchmark", "median", "best sample");
+    println!("{:<50} {:>15} {:>21}", "benchmark", "median", "best sample");
 
     let video = video_fragment();
     let video_bytes = encode(&video);
@@ -252,6 +289,98 @@ fn main() {
     bench.run("datagram/video_fragment/decode", None, || {
         decode::<ClientRelayDatagram>(black_box(&video_bytes))
     });
+
+    // A video fragment with 1200 octets of media data, as a datagram carries it
+    #[cfg(feature = "bytes")]
+    {
+        let ClientRelayDatagram::VideoFragment(metadata) = video_fragment() else {
+            unreachable!()
+        };
+        let data = (0..1_200)
+            .map(|i| (i * 31 + 7) as u8)
+            .collect::<bytes::Bytes>();
+        let len = data.len();
+
+        // Encode the metadata and append the data, decode the metadata and take the data from
+        // the octets after it, as without `[PER: TRAILING]`
+        let append = ClientRelayDatagram::VideoFragment(metadata.clone());
+        let append_encode = || {
+            let mut bytes = encode(black_box(&append));
+            bytes.reserve_exact(data.len());
+            bytes.extend_from_slice(black_box(&data));
+            bytes
+        };
+        let append_bytes = bytes::Bytes::from(append_encode());
+        bench.run(
+            "datagram/video_fragment_1200/append/encode",
+            Some(len),
+            append_encode,
+        );
+        bench.run(
+            "datagram/video_fragment_1200/append/decode",
+            Some(len),
+            || {
+                let bytes = black_box(&append_bytes).clone();
+                let mut reader = UperReader::from(Bits::from(&bytes[..]));
+                let metadata = reader.read::<ClientRelayDatagram>().unwrap();
+                let data = bytes.slice(bytes.len() - reader.bits_remaining() / 8..);
+                (metadata, data)
+            },
+        );
+
+        let trailing_vec = ClientRelayDatagramWithData::VideoFragment(VideoFragmentDatagram {
+            metadata: metadata.clone(),
+            data: data.to_vec(),
+        });
+        let trailing_vec_encode = || {
+            let mut writer = UperWriter::with_capacity(64 + len);
+            writer.write(black_box(&trailing_vec)).unwrap();
+            writer.into_bytes_vec()
+        };
+        assert_eq!(&append_bytes[..], &trailing_vec_encode()[..]);
+        bench.run(
+            "datagram/video_fragment_1200/trailing_vec/encode",
+            Some(len),
+            trailing_vec_encode,
+        );
+        bench.run(
+            "datagram/video_fragment_1200/trailing_vec/decode",
+            Some(len),
+            || decode::<ClientRelayDatagramWithData>(black_box(&append_bytes)),
+        );
+
+        let trailing_bytes =
+            SharedClientRelayDatagram::VideoFragment(SharedVideoFragmentDatagram {
+                metadata,
+                data: data.clone(),
+            });
+        let trailing_bytes_encode = || {
+            let mut writer = UperWriter::with_capacity(64 + len);
+            writer.write(black_box(&trailing_bytes)).unwrap();
+            writer.into_bytes_vec()
+        };
+        assert_eq!(&append_bytes[..], &trailing_bytes_encode()[..]);
+        assert_eq!(
+            trailing_bytes,
+            UperReader::from(append_bytes.clone())
+                .read::<SharedClientRelayDatagram>()
+                .unwrap()
+        );
+        bench.run(
+            "datagram/video_fragment_1200/trailing_bytes/encode",
+            Some(len),
+            trailing_bytes_encode,
+        );
+        bench.run(
+            "datagram/video_fragment_1200/trailing_bytes/decode",
+            Some(len),
+            || {
+                UperReader::from(black_box(&append_bytes).clone())
+                    .read::<SharedClientRelayDatagram>()
+                    .unwrap()
+            },
+        );
+    }
 
     let feedback = transport_feedback(64);
     let feedback_bytes = encode(&feedback);

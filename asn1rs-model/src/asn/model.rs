@@ -3,6 +3,7 @@ use crate::asn::peekable::PeekableTokens;
 use crate::asn::resolve_scope::ResolveScope;
 use crate::asn::{Asn, ComponentTypeList, InnerTypeConstraints, Size, Tag, Type};
 use crate::asn::{BitString, Charset, Choice, Enumerated, Integer};
+use crate::asn::{EncodingInstruction, OctetString};
 use crate::model::{Field, Import, LiteralValue, Model, ValueReference};
 use crate::parse::Location;
 use crate::parse::Token;
@@ -12,6 +13,50 @@ use crate::rust::Rust;
 use std::convert::TryFrom;
 use std::iter::Peekable;
 use std::vec::IntoIter;
+
+/// The prefixes in front of a type, see [`Model::next_with_type_prefix`].
+#[derive(Default)]
+pub(crate) struct TypePrefix {
+    pub(crate) tag: Option<Tag>,
+    /// The encoding instruction and the token that names it, for error messages.
+    pub(crate) encoding: Option<(EncodingInstruction, Token)>,
+}
+
+impl TypePrefix {
+    /// Applies the encoding instruction, if any, to the type that follows the prefixes.
+    pub(crate) fn apply_encoding(
+        &self,
+        r#type: Type<Unresolved>,
+    ) -> Result<Type<Unresolved>, Error> {
+        match (&self.encoding, r#type) {
+            (None, r#type) => Ok(r#type),
+            (Some((EncodingInstruction::Trailing, _)), Type::OctetString(octets)) => {
+                Ok(Type::OctetString(OctetString {
+                    trailing: true,
+                    ..octets
+                }))
+            }
+            (
+                Some((EncodingInstruction::Trailing, token)),
+                Type::Boolean
+                | Type::Integer(_)
+                | Type::String(..)
+                | Type::BitString(_)
+                | Type::Null
+                | Type::Optional(_)
+                | Type::Default(..)
+                | Type::Sequence(_)
+                | Type::SequenceOf(..)
+                | Type::Set(_)
+                | Type::SetOf(..)
+                | Type::Enumerated(_)
+                | Type::Choice(_)
+                | Type::TypeReference(..)
+                | Type::Skip(_),
+            ) => Err(Error::inapplicable_encoding_instruction(token.clone())),
+        }
+    }
+}
 
 impl Model<Asn<Unresolved>> {
     pub fn try_from(value: Vec<Token>) -> Result<Self, Error> {
@@ -135,9 +180,18 @@ impl Model<Asn<Unresolved>> {
         iter.next_separator_eq_or_err(':')?;
         iter.next_separator_eq_or_err('=')?;
 
-        let (token, tag) = Self::next_with_opt_tag(iter)?;
+        let (token, prefix) = Self::next_with_type_prefix(iter)?;
+        let tag = prefix.tag;
 
-        if token.eq_text_ignore_ascii_case("SEQUENCE") {
+        if let Some((_, instruction)) = prefix.encoding.as_ref().filter(|_| {
+            ["SEQUENCE", "SET", "ENUMERATED", "CHOICE"]
+                .iter()
+                .any(|text| token.eq_text_ignore_ascii_case(text))
+        }) {
+            Err(Error::inapplicable_encoding_instruction(
+                instruction.clone(),
+            ))
+        } else if token.eq_text_ignore_ascii_case("SEQUENCE") {
             Ok(crate::model::Definition(
                 name,
                 Self::read_sequence_or_sequence_of(iter)?.opt_tagged(tag),
@@ -158,9 +212,10 @@ impl Model<Asn<Unresolved>> {
                 Type::Choice(Choice::try_from(iter)?).opt_tagged(tag),
             ))
         } else if let Some(text) = token.text() {
+            let role = Self::read_role_given_text(iter, text.to_string())?;
             Ok(crate::model::Definition(
                 name,
-                Self::read_role_given_text(iter, text.to_string())?.opt_tagged(tag),
+                prefix.apply_encoding(role)?.opt_tagged(tag),
             ))
         } else {
             Err(Error::unexpected_token(token))
@@ -268,17 +323,33 @@ impl Model<Asn<Unresolved>> {
         Ok(string)
     }
 
-    pub(crate) fn next_with_opt_tag<T: Iterator<Item = Token>>(
-        iter: &mut Peekable<T>,
-    ) -> Result<(Token, Option<Tag>), Error> {
-        let token = iter.next_or_err()?;
-        if token.eq_separator('[') {
-            let tag = Tag::try_from(&mut *iter)?;
-            iter.next_separator_eq_or_err(']')?;
+    /// Reads the prefixes in front of a type, ITU-T X.680 | ISO/IEC 8824-1, 32: at most one tag
+    /// and at most one encoding prefix, in either order. Returns the first token after them.
+    pub(crate) fn next_with_type_prefix<Tokens: Iterator<Item = Token>>(
+        iter: &mut Peekable<Tokens>,
+    ) -> Result<(Token, TypePrefix), Error> {
+        let mut prefix = TypePrefix::default();
+        loop {
             let token = iter.next_or_err()?;
-            Ok((token, Some(tag)))
-        } else {
-            Ok((token, None))
+            if !token.eq_separator('[') {
+                return Ok((token, prefix));
+            }
+            let first = iter.next_or_err()?;
+            if iter.next_is_separator_and_eq(':') {
+                let instruction = iter.next_or_err()?;
+                if prefix.encoding.is_some()
+                    || !first.eq_text_ignore_ascii_case("PER")
+                    || !instruction.eq_text_ignore_ascii_case(EncodingInstruction::PER_TRAILING)
+                {
+                    return Err(Error::unsupported_encoding_instruction(instruction));
+                }
+                prefix.encoding = Some((EncodingInstruction::Trailing, instruction));
+            } else if prefix.tag.is_some() {
+                return Err(Error::unexpected_token(first));
+            } else {
+                prefix.tag = Some(Tag::try_from_first_token(first, iter)?);
+            }
+            iter.next_separator_eq_or_err(']')?;
         }
     }
 
@@ -304,7 +375,7 @@ impl Model<Asn<Unresolved>> {
             "visiblestring" => Type::String(Self::maybe_read_size(iter)?, Charset::Visible),
             "octet" => {
                 iter.next_text_eq_ignore_case_or_err("STRING")?;
-                Type::OctetString(Self::maybe_read_size(iter)?)
+                Type::OctetString(OctetString::with_size(Self::maybe_read_size(iter)?))
             }
             "bit" => {
                 iter.next_text_eq_ignore_case_or_err("STRING")?;
@@ -378,11 +449,12 @@ impl Model<Asn<Unresolved>> {
         iter: &mut Peekable<T>,
     ) -> Result<(Field<Asn<Unresolved>>, bool), Error> {
         let name = iter.next_text_or_err()?;
-        let (token, tag) = Self::next_with_opt_tag(iter)?;
+        let (token, prefix) = Self::next_with_type_prefix(iter)?;
+        let tag = prefix.tag;
+        let role = Self::read_role_given_text(iter, token.into_text_or_else(Error::no_text)?)?;
         let mut field = Field {
             name,
-            role: Self::read_role_given_text(iter, token.into_text_or_else(Error::no_text)?)?
-                .opt_tagged(tag),
+            role: prefix.apply_encoding(role)?.opt_tagged(tag),
         };
 
         let token = {
