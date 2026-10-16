@@ -85,12 +85,16 @@ impl<T: Iterator<Item = Token>> TryFrom<&mut Peekable<T>> for Choice<Unresolved>
                 }
             } else {
                 let name = iter.next_text_or_err()?;
-                let (token, tag) = Model::<Asn<Unresolved>>::next_with_opt_tag(iter)?;
+                let (token, prefix) = Model::<Asn<Unresolved>>::next_with_type_prefix(iter)?;
                 let r#type = Model::<Asn<Unresolved>>::read_role_given_text(
                     iter,
                     token.into_text_or_else(Error::no_text)?,
                 )?;
-                choice.variants.push(ChoiceVariant { name, tag, r#type });
+                choice.variants.push(ChoiceVariant {
+                    name,
+                    tag: prefix.tag,
+                    r#type: prefix.apply_encoding(r#type)?,
+                });
             }
 
             loop_ctrl_separator!(iter.next_or_err()?);

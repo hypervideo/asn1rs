@@ -11,7 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Implement `UperReader::into_bits` ([aa6b083], [gh-82], [@jkalez])
  - Derive `Clone` for `UperReader` ([d6c5d18], [gh-83], [@jkalez])
  - `RustCodeGenerator::add_field_attr` to add attributes to fields and variants
+ - The PER encoding instruction `[PER: TRAILING]` for `OCTET STRING`, written as an ITU-T X.680
+   encoding prefix (`data [PER: TRAILING] OCTET STRING`) or as `#[asn(octet_string(trailing))]`.
+   In UPER, the octets start at the next octet boundary and extend to the end of the encoding,
+   without a length determinant. This instruction is specific to asn1rs
+ - `OCTET STRING`s can be held in any `OctetStringType`, such as `bytes::Bytes` with the new
+   `bytes` feature. The attribute macro takes the type from the field, and
+   `RustCodeGenerator::set_octet_string_type` sets it for generated code
+ - `SharedBits` (feature `bytes`) reads from a `bytes::Bytes` and hands out `OCTET STRING`s that
+   start at an octet boundary without copying them
 ### Changed
+ - `asn1rs_model::asn::Type::OctetString` holds an `OctetString` with the size and the encoding
+   instruction, and `RustType::VecU8` is now `RustType::OctetString`
  - Implement UperReader for ScopedBitReader over Bits ([aa6b083], [gh-81], [@jkalez])
 ### Deprecated
 ### Removed

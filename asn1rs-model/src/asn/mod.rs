@@ -16,6 +16,7 @@ mod enumerated;
 mod inner_type_constraints;
 mod integer;
 mod model;
+mod octet_string;
 mod oid;
 mod peekable;
 mod range;
@@ -33,6 +34,8 @@ pub use enumerated::Enumerated;
 pub use enumerated::EnumeratedVariant;
 pub use inner_type_constraints::InnerTypeConstraints;
 pub use integer::Integer;
+pub use octet_string::EncodingInstruction;
+pub use octet_string::OctetString;
 pub use oid::ObjectIdentifier;
 pub use oid::ObjectIdentifierComponent;
 pub use peekable::PeekableTokens;
@@ -167,7 +170,7 @@ pub enum Type<RS: ResolveState = Resolved> {
     Integer(Integer<RS::RangeType>),
     String(Size<RS::SizeType>, Charset),
     /// ITU-T X.680 | ISO/IEC 8824-1, 23
-    OctetString(Size<RS::SizeType>),
+    OctetString(OctetString<RS::SizeType>),
     /// ITU-T X.680 | ISO/IEC 8824-1, 22
     BitString(BitString<RS::SizeType>),
     /// ITU-T X.680 | ISO/IEC 8824-1, 24
@@ -214,7 +217,7 @@ impl<RS: ResolveState> Type<RS> {
     }
 
     pub fn unconstrained_octetstring() -> Self {
-        Self::OctetString(Size::Any)
+        Self::OctetString(OctetString::with_size(Size::Any))
     }
 
     pub fn integer_with_range(range: Range<Option<RS::RangeType>>) -> Self {
@@ -282,7 +285,7 @@ impl Type<Unresolved> {
             Type::Boolean => Type::Boolean,
             Type::Integer(integer) => Type::Integer(integer.try_resolve(resolver)?),
             Type::String(size, charset) => Type::String(size.try_resolve(resolver)?, *charset),
-            Type::OctetString(size) => Type::OctetString(size.try_resolve(resolver)?),
+            Type::OctetString(octets) => Type::OctetString(octets.try_resolve(resolver)?),
             Type::BitString(string) => Type::BitString(string.try_resolve(resolver)?),
             Type::Null => Type::Null,
             Type::Optional(inner) => Type::Optional(Box::new(inner.try_resolve(resolver)?)),
