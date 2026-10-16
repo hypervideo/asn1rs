@@ -46,7 +46,7 @@ impl ProtobufType {
             ProtobufType::SInt32 => RustType::I32(Range::inclusive(0, i32::MAX)),
             ProtobufType::SInt64 => RustType::I64(Range::inclusive(0, i64::MAX)),
             ProtobufType::String => RustType::String(Size::Any, Charset::Utf8),
-            ProtobufType::Bytes => RustType::VecU8(Size::Any),
+            ProtobufType::Bytes => RustType::vec_u8(Size::Any),
             ProtobufType::BitsReprByBytesAndBitsLen => RustType::BitVec(Size::Any),
             ProtobufType::Repeated(inner) => {
                 RustType::Vec(Box::new(inner.to_rust()), Size::Any, EncodingOrdering::Keep)
@@ -145,6 +145,10 @@ impl Model<Protobuf> {
             } => {
                 let mut proto_fields = Vec::with_capacity(fields.len());
                 for field in fields.iter() {
+                    if let RustType::Skip(_) = field.r#type() {
+                        // Neither written nor read, so it takes no field number
+                        continue;
+                    }
                     proto_fields.push((
                         proto_field_name(field.name()),
                         Self::definition_type_to_protobuf_type(field.r#type()),
@@ -189,7 +193,7 @@ impl Model<Protobuf> {
             RustType::U64(_) => ProtobufType::UInt64,
             RustType::I64(_) => ProtobufType::SInt64,
             RustType::String(..) => ProtobufType::String,
-            RustType::VecU8(_) => ProtobufType::Bytes,
+            RustType::OctetString(..) => ProtobufType::Bytes,
             RustType::BitVec(_) => ProtobufType::BitsReprByBytesAndBitsLen,
             RustType::Null => ProtobufType::Bytes,
 
@@ -206,6 +210,13 @@ impl Model<Protobuf> {
 
             RustType::Vec(inner, _size, _ordering) => {
                 ProtobufType::Repeated(Box::new(Self::definition_type_to_protobuf_type(inner)))
+            }
+
+            RustType::Skip(name) => {
+                panic!(
+                    "The skipped type {} has no protobuf type, only fields can be skipped",
+                    name
+                )
             }
         }
     }
@@ -267,6 +278,27 @@ mod tests {
             &[Definition(
                 "Mine".into(),
                 Protobuf::Message(vec![("field".into(), ProtobufType::UInt32)]),
+            )],
+        );
+    }
+
+    #[test]
+    fn test_rust_struct_with_skipped_field_to_protobuf() {
+        test_model_definition_conversion(
+            &[Definition(
+                "Mine".into(),
+                Rust::struct_from_fields(vec![
+                    Field::from_name_type("first", RustType::U8(Range::inclusive(0, 255))),
+                    Field::from_name_type("skipped", RustType::Skip("Bytes".into())),
+                    Field::from_name_type("last", RustType::Bool),
+                ]),
+            )],
+            &[Definition(
+                "Mine".into(),
+                Protobuf::Message(vec![
+                    ("first".into(), ProtobufType::UInt32),
+                    ("last".into(), ProtobufType::Bool),
+                ]),
             )],
         );
     }
@@ -352,7 +384,7 @@ mod tests {
                 ),
                 Definition(
                     "Second".into(),
-                    Rust::tuple_struct_from_type(RustType::VecU8(Size::Any)),
+                    Rust::tuple_struct_from_type(RustType::vec_u8(Size::Any)),
                 ),
             ],
             &[

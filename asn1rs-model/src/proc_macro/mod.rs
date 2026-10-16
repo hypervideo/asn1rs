@@ -19,6 +19,7 @@ use syn::spanned::Spanned;
 use syn::{Attribute, Item};
 
 use crate::model::{Definition, Field, Model};
+use crate::rust::{Rust, RustType};
 pub use inline::asn_to_rust;
 
 pub type AsnModelType = crate::asn::Asn<Resolved>;
@@ -52,7 +53,7 @@ pub fn parse(attr: TokenStream, item: TokenStream) -> TokenStream {
         println!();
     }
 
-    let additional_impl = expand(definition);
+    let additional_impl = expand(definition, Some(&item));
 
     let result = quote! {
         #item
@@ -68,7 +69,15 @@ pub fn parse(attr: TokenStream, item: TokenStream) -> TokenStream {
     result
 }
 
-pub fn expand(definition: Option<Definition<AsnModelType>>) -> Vec<TokenStream> {
+/// The implementations for a definition of the attribute macro.
+///
+/// An OCTET STRING can be held in any Rust type that implements `OctetStringType`. With `item`,
+/// the definition holds them in the types that the fields and variants of `item` declare, for
+/// example `bytes::Bytes` for `#[asn(octet_string)] data: bytes::Bytes`.
+pub fn expand(
+    definition: Option<Definition<AsnModelType>>,
+    item: Option<&Item>,
+) -> Vec<TokenStream> {
     let mut additional_impl: Vec<TokenStream> = Vec::default();
     let mut model: Model<AsnModelType> = Model {
         name: "__proc_macro".to_string(),
@@ -85,12 +94,136 @@ pub fn expand(definition: Option<Definition<AsnModelType>>) -> Vec<TokenStream> 
             println!("---------- parsed definition to rust end ----------");
             println!();
         }
-        additional_impl.push(
-            TokenStream::from_str(&AsnDefWriter::stringify(&model.to_rust_keep_names())).unwrap(),
-        );
+        let mut rust = model.to_rust_keep_names();
+        if let Some(item) = item {
+            for Definition(_name, definition) in &mut rust.definitions {
+                definition.use_declared_octet_string_types(item);
+            }
+        }
+        additional_impl.push(TokenStream::from_str(&AsnDefWriter::stringify(&rust)).unwrap());
     }
 
     additional_impl
+}
+
+impl Rust {
+    /// Holds the OCTET STRINGs of the fields or variants in the Rust types that `item` declares for
+    /// them.
+    fn use_declared_octet_string_types(&mut self, item: &Item) {
+        match self {
+            Rust::Struct { fields, .. } => {
+                let Item::Struct(strct) = item else {
+                    return;
+                };
+                for field in fields {
+                    if let Some(declared) = strct
+                        .fields
+                        .iter()
+                        .find(|f| f.ident.as_ref().is_some_and(|i| i == field.name()))
+                    {
+                        field
+                            .type_mut()
+                            .use_declared_octet_string_type(&declared.ty);
+                    }
+                }
+            }
+            Rust::TupleStruct { r#type, .. } => {
+                let Item::Struct(strct) = item else {
+                    return;
+                };
+                if let Some(declared) = strct.fields.iter().next() {
+                    r#type.use_declared_octet_string_type(&declared.ty);
+                }
+            }
+            Rust::DataEnum(enumeration) => {
+                let Item::Enum(enm) = item else {
+                    return;
+                };
+                for variant in enumeration.variants_mut() {
+                    if let Some(declared) = enm
+                        .variants
+                        .iter()
+                        .find(|v| v.ident == variant.name())
+                        .and_then(|v| v.fields.iter().next())
+                    {
+                        variant
+                            .type_mut()
+                            .use_declared_octet_string_type(&declared.ty);
+                    }
+                }
+            }
+            Rust::Enum(_) => {}
+        }
+    }
+}
+
+impl RustType {
+    /// Holds the OCTET STRING in `declared`, the Rust type of its field or variant, unless that is
+    /// `Vec<u8>`.
+    fn use_declared_octet_string_type(&mut self, declared: &syn::Type) {
+        match self {
+            RustType::OctetString(_, rust_type) => {
+                let is_vec_u8 = matches!(
+                    declared.single_generic_argument("Vec"),
+                    Some(syn::Type::Path(path)) if path.qself.is_none() && path.path.is_ident("u8")
+                );
+                if !is_vec_u8 {
+                    *rust_type = Some(quote! { #declared }.to_string());
+                }
+            }
+            RustType::Option(inner) => {
+                if let Some(declared) = declared.single_generic_argument("Option") {
+                    inner.use_declared_octet_string_type(declared);
+                }
+            }
+            RustType::Vec(inner, ..) => {
+                if let Some(declared) = declared.single_generic_argument("Vec") {
+                    inner.use_declared_octet_string_type(declared);
+                }
+            }
+            RustType::Default(inner, _) => inner.use_declared_octet_string_type(declared),
+            RustType::Bool
+            | RustType::I8(_)
+            | RustType::U8(_)
+            | RustType::I16(_)
+            | RustType::U16(_)
+            | RustType::I32(_)
+            | RustType::U32(_)
+            | RustType::I64(_)
+            | RustType::U64(_)
+            | RustType::String(..)
+            | RustType::BitVec(_)
+            | RustType::Null
+            | RustType::Complex(..)
+            | RustType::Skip(_) => {}
+        }
+    }
+}
+
+/// The type argument of a generic type, such as the `T` of `Option<T>`.
+trait SingleGenericArgument {
+    /// The type argument if `self` is `outer<T>` or a path that ends with it, such as
+    /// `std::vec::Vec<T>` for `outer` `Vec`.
+    fn single_generic_argument(&self, outer: &str) -> Option<&syn::Type>;
+}
+
+impl SingleGenericArgument for syn::Type {
+    fn single_generic_argument(&self, outer: &str) -> Option<&syn::Type> {
+        let syn::Type::Path(path) = self else {
+            return None;
+        };
+        let segment = path.path.segments.last()?;
+        if segment.ident != outer {
+            return None;
+        }
+        let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+            return None;
+        };
+        match arguments.args.iter().collect::<Vec<_>>()[..] {
+            [syn::GenericArgument::Type(inner)] => Some(inner),
+            _ => None,
+        }
+    }
 }
 
 pub fn parse_asn_definition(

@@ -11,6 +11,8 @@ use std::fmt::Debug;
 use std::ops::Range;
 
 pub use crate::protocol::per::unaligned::buffer::Bits;
+#[cfg(feature = "bytes")]
+pub use crate::protocol::per::unaligned::shared::SharedBits;
 pub use crate::protocol::per::unaligned::ScopedBitRead;
 
 #[derive(Debug, Clone)]
@@ -106,27 +108,13 @@ impl Scope {
                 number_of_ext_fields,
             } => {
                 if *calls_until_ext_bitfield == 0 {
-                    buffer.with_write_position_at(*ext_bit_pos, |b| b.write_bit(is_present))?;
-                    if is_present {
-                        // when we reach this point, there is never zero numbers of ext-fields
-                        buffer.write_normally_small_non_negative_whole_number(
-                            *number_of_ext_fields as u64 - 1,
-                        )?;
-                        let pos = buffer.write_position;
-                        for _ in 0..*number_of_ext_fields {
-                            if let Err(e) = buffer.write_bit(true) {
-                                buffer.write_position = pos;
-                                return Err(e);
-                            }
-                        }
-
-                        // pos + 1 because the bit for the current call is already set
-                        // by the initializer loop above
-                        let range = pos + 1..buffer.write_position;
-                        *self = Scope::AllBitField(range);
-                    } else {
-                        *self = Scope::ExtensibleSequenceEmpty(name);
-                    }
+                    *self = Self::write_extension_header(
+                        buffer,
+                        name,
+                        *ext_bit_pos,
+                        *number_of_ext_fields,
+                        is_present,
+                    )?;
                     // no need for this
                     // if is_present is true, the bit is already set (initialize loop above)
                     // if is_present is false, no bit will be written (empty)
@@ -197,27 +185,14 @@ impl Scope {
                 number_of_ext_fields,
             } => {
                 if *calls_until_ext_bitfield == 0 {
-                    if bits.with_read_position_at(*ext_bit_pos, |b| b.read_bit())? {
-                        let read_number_of_ext_fields =
-                            bits.read_normally_small_length()? as usize + 1;
-                        if read_number_of_ext_fields > *number_of_ext_fields {
-                            #[cfg(feature = "descriptive-deserialize-errors")]
-                            descriptions.push(ScopeDescription::warning(
-                                format!("read_number_of_ext_fields({read_number_of_ext_fields}) > *number_of_ext_fields({number_of_ext_fields})")
-                            ));
-                            //     return Err(Error::UnsupportedOperation(format!(
-                            //         "Expected no more than {} extended field{} but got {}",
-                            //         number_of_ext_fields,
-                            //         if *number_of_ext_fields != 1 { "s" } else { "" },
-                            //         read_number_of_ext_fields
-                            //     )));
-                        }
-                        let range = bits.pos()..bits.pos() + *number_of_ext_fields;
-                        bits.set_pos(range.start + read_number_of_ext_fields); // skip bit-field
-                        *self = Scope::AllBitField(range);
-                    } else {
-                        *self = Scope::ExtensibleSequenceEmpty(name);
-                    }
+                    *self = Self::read_extension_header(
+                        #[cfg(feature = "descriptive-deserialize-errors")]
+                        descriptions,
+                        bits,
+                        name,
+                        *ext_bit_pos,
+                        *number_of_ext_fields,
+                    )?;
                     self.read_from_field(
                         #[cfg(feature = "descriptive-deserialize-errors")]
                         descriptions,
@@ -241,12 +216,80 @@ impl Scope {
             Scope::ExtensibleSequenceEmpty(_) => Ok(Some(false)),
         }
     }
+
+    /// Writes the presence flag and the bit-field of the extension fields, once the first of them
+    /// is reached. This happens at most once per sequence, so it is kept out of the code that is
+    /// inlined for every field.
+    #[inline(never)]
+    fn write_extension_header(
+        buffer: &mut BitBuffer,
+        name: &'static str,
+        ext_bit_pos: usize,
+        number_of_ext_fields: usize,
+        is_present: bool,
+    ) -> Result<Scope, Error> {
+        buffer.with_write_position_at(ext_bit_pos, |b| b.write_bit(is_present))?;
+        if is_present {
+            // when we reach this point, there is never zero numbers of ext-fields
+            buffer
+                .write_normally_small_non_negative_whole_number(number_of_ext_fields as u64 - 1)?;
+            let pos = buffer.write_position;
+            for _ in 0..number_of_ext_fields {
+                if let Err(e) = buffer.write_bit(true) {
+                    buffer.write_position = pos;
+                    return Err(e);
+                }
+            }
+
+            // pos + 1 because the bit for the current call is already set
+            // by the initializer loop above
+            Ok(Scope::AllBitField(pos + 1..buffer.write_position))
+        } else {
+            Ok(Scope::ExtensibleSequenceEmpty(name))
+        }
+    }
+
+    /// Reads the presence flag and the bit-field of the extension fields, once the first of them
+    /// is reached. This happens at most once per sequence, so it is kept out of the code that is
+    /// inlined for every field.
+    #[inline(never)]
+    fn read_extension_header(
+        #[cfg(feature = "descriptive-deserialize-errors")] descriptions: &mut Vec<ScopeDescription>,
+        bits: &mut impl ScopedBitRead,
+        name: &'static str,
+        ext_bit_pos: usize,
+        number_of_ext_fields: usize,
+    ) -> Result<Scope, Error> {
+        if bits.with_read_position_at(ext_bit_pos, |b| b.read_bit())? {
+            let read_number_of_ext_fields = bits.read_normally_small_length()? as usize + 1;
+            if read_number_of_ext_fields > number_of_ext_fields {
+                #[cfg(feature = "descriptive-deserialize-errors")]
+                descriptions.push(ScopeDescription::warning(
+                    format!("read_number_of_ext_fields({read_number_of_ext_fields}) > *number_of_ext_fields({number_of_ext_fields})")
+                ));
+                //     return Err(Error::UnsupportedOperation(format!(
+                //         "Expected no more than {} extended field{} but got {}",
+                //         number_of_ext_fields,
+                //         if *number_of_ext_fields != 1 { "s" } else { "" },
+                //         read_number_of_ext_fields
+                //     )));
+            }
+            let range = bits.pos()..bits.pos() + number_of_ext_fields;
+            bits.set_pos(range.start + read_number_of_ext_fields); // skip bit-field
+            Ok(Scope::AllBitField(range))
+        } else {
+            Ok(Scope::ExtensibleSequenceEmpty(name))
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct UperWriter {
     bits: BitBuffer,
     scope: Option<Scope>,
+    /// Whether an OCTET STRING with `[PER: TRAILING]` has been written, after which nothing else
+    /// may be written
+    after_trailing_octets: bool,
 }
 
 impl UperWriter {
@@ -268,7 +311,7 @@ impl UperWriter {
     pub fn into_bytes_vec(self) -> Vec<u8> {
         debug_assert_eq!(
             (self.bit_len() + BYTE_LEN - 1) / BYTE_LEN,
-            self.bits.buffer.len()
+            self.bits.byte_len()
         );
         self.bits.into()
     }
@@ -309,6 +352,9 @@ impl UperWriter {
 
     #[inline]
     pub fn write_bit_field_entry(&mut self, is_opt: bool, is_present: bool) -> Result<(), Error> {
+        if self.after_trailing_octets {
+            return Err(ErrorKind::TrailingOctetStringNotLast.into());
+        }
         if let Some(scope) = &mut self.scope {
             scope.write_into_field(&mut self.bits, is_opt, is_present)
         } else if is_opt {
@@ -327,12 +373,46 @@ impl UperWriter {
         if const_map_or!(self.scope, Scope::encode_as_open_type_field, false) {
             let mut writer = UperWriter::with_capacity(512);
             let result = f(&mut writer)?;
+            writer.ensure_no_trailing_octets()?;
             self.bits
                 .write_octetstring(None, None, false, writer.bits.content())?;
             Ok(result)
         } else {
             f(self)
         }
+    }
+
+    /// Fails if `self` encodes an open type and contains an OCTET STRING with `[PER: TRAILING]`,
+    /// whose octet boundary is not defined there
+    #[inline]
+    fn ensure_no_trailing_octets(&self) -> Result<(), Error> {
+        if self.after_trailing_octets {
+            Err(ErrorKind::TrailingOctetStringInOpenType.into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Writes an OCTET STRING with the PER encoding instruction `[PER: TRAILING]`.
+    ///
+    /// That is zero bits up to the next octet boundary, then the octets, without a length
+    /// determinant.
+    #[inline]
+    fn write_trailing_octets<Constraint: octetstring::Constraint>(
+        &mut self,
+        value: &[u8],
+    ) -> Result<(), Error> {
+        if const_map_or!(self.scope, Scope::encode_as_open_type_field, false) {
+            return Err(ErrorKind::TrailingOctetStringInOpenType.into());
+        }
+        Constraint::ensure_trailing_size(value.len())?;
+        let padding = (BYTE_LEN - self.bits.write_position % BYTE_LEN) % BYTE_LEN;
+        if padding > 0 {
+            self.bits.write_bits_u64(0, padding)?;
+        }
+        self.bits.write_bits(value)?;
+        self.after_trailing_octets = true;
+        Ok(())
     }
 
     #[inline]
@@ -486,6 +566,7 @@ impl Writer for UperWriter {
                 // TODO performance
                 let mut writer = UperWriter::with_capacity(512);
                 choice.write_content(&mut writer)?;
+                writer.ensure_no_trailing_octets()?;
                 w.bits
                     .write_octetstring(None, None, false, writer.byte_content())
             } else {
@@ -602,8 +683,7 @@ impl Writer for UperWriter {
             )?;
 
             for char in value.chars().map(|c| c as u8) {
-                // 7 bits
-                w.bits.write_bits_with_offset(&[char], 1)?;
+                w.bits.write_bits_u64(u64::from(char), 7)?;
             }
 
             Ok(())
@@ -632,7 +712,7 @@ impl Writer for UperWriter {
                     0 => 0,
                     c => c - 15,
                 };
-                w.bits.write_bits_with_offset(&[char], 4)?;
+                w.bits.write_bits_u64(u64::from(char), 4)?;
             }
 
             Ok(())
@@ -657,7 +737,7 @@ impl Writer for UperWriter {
             )?;
 
             for char in value.chars() {
-                w.bits.write_bits_with_offset(&[char as u8], 1)?;
+                w.bits.write_bits_u64(u64::from(char as u8), 7)?;
             }
 
             Ok(())
@@ -682,7 +762,7 @@ impl Writer for UperWriter {
             )?;
 
             for char in value.chars() {
-                w.bits.write_bits_with_offset(&[char as u8], 1)?;
+                w.bits.write_bits_u64(u64::from(char as u8), 7)?;
             }
 
             Ok(())
@@ -695,6 +775,9 @@ impl Writer for UperWriter {
         value: &[u8],
     ) -> Result<(), Self::Error> {
         self.write_bit_field_entry(false, true)?;
+        if C::TRAILING {
+            return self.write_trailing_octets::<C>(value);
+        }
         self.with_buffer(|w| {
             w.bits
                 .write_octetstring(C::MIN, C::MAX, C::EXTENSIBLE, value)
@@ -730,6 +813,8 @@ impl Writer for UperWriter {
 pub struct UperReader<B: ScopedBitRead> {
     bits: B,
     scope: Option<Scope>,
+    /// How many open types the reader is in, see [`UperReader::read_whole_sub_slice`]
+    open_type_depth: usize,
     #[cfg(feature = "descriptive-deserialize-errors")]
     scope_description: Vec<ScopeDescription>,
 }
@@ -739,6 +824,7 @@ impl<B: ScopedBitRead> From<B> for UperReader<B> {
         UperReader {
             bits,
             scope: None,
+            open_type_depth: 0,
             #[cfg(feature = "descriptive-deserialize-errors")]
             scope_description: Vec::new(),
         }
@@ -748,6 +834,13 @@ impl<B: ScopedBitRead> From<B> for UperReader<B> {
 impl<'a> From<(&'a [u8], usize)> for UperReader<Bits<'a>> {
     fn from(bits: (&'a [u8], usize)) -> Self {
         UperReader::from(Bits::from(bits))
+    }
+}
+
+#[cfg(feature = "bytes")]
+impl From<bytes::Bytes> for UperReader<SharedBits> {
+    fn from(bytes: bytes::Bytes) -> Self {
+        UperReader::from(SharedBits::from(bytes))
     }
 }
 
@@ -853,7 +946,9 @@ impl<B: ScopedBitRead> UperReader<B> {
     ) -> Result<T, Error> {
         let write_position = self.bits.pos() + (length_bytes * BYTE_LEN);
         let write_original = core::mem::replace(&mut self.bits.len(), write_position);
+        self.open_type_depth += 1;
         let result = f(self);
+        self.open_type_depth -= 1;
         // extend to original position
         let len = self.bits.set_len(write_original);
         #[cfg(feature = "descriptive-deserialize-errors")]
@@ -871,6 +966,38 @@ impl<B: ScopedBitRead> UperReader<B> {
             self.bits.set_pos(write_position);
         }
         result
+    }
+
+    /// Reads an OCTET STRING with the PER encoding instruction `[PER: TRAILING]`.
+    ///
+    /// That is all octets from the next octet boundary to the end of the encoding.
+    #[inline]
+    fn read_trailing_octets<
+        Constraint: octetstring::Constraint,
+        Octets: octetstring::OctetStringType,
+    >(
+        &mut self,
+    ) -> Result<Octets, Error> {
+        if self.open_type_depth > 0
+            || self
+                .scope
+                .as_ref()
+                .is_some_and(Scope::encode_as_open_type_field)
+        {
+            return Err(ErrorKind::TrailingOctetStringInOpenType.into());
+        }
+        let start = self.bits.pos().div_ceil(BYTE_LEN) * BYTE_LEN;
+        let end = self.bits.len();
+        if start > end {
+            return Err(Error::insufficient_data_in_source_buffer());
+        }
+        let byte_len = (end - start) / BYTE_LEN;
+        Constraint::ensure_trailing_size(byte_len)?;
+        self.bits.set_pos(start);
+        let octets = self.bits.read_octets(byte_len)?;
+        // Bits that do not fill an octet after the last one are not part of the value.
+        self.bits.set_pos(end);
+        Ok(octets)
     }
 
     #[inline]
@@ -1219,8 +1346,8 @@ impl<B: ScopedBitRead> Reader for UperReader<B> {
             };
 
             let mut buffer = vec![0u8; len as usize];
-            for i in 0..len as usize {
-                r.bits.read_bits_with_offset(&mut buffer[i..i + 1], 1)?;
+            for byte in &mut buffer {
+                *byte = r.bits.read_bits_u64(7)? as u8;
             }
 
             String::from_utf8(buffer).map_err(|e| ErrorKind::FromUtf8Error(e).into())
@@ -1249,12 +1376,11 @@ impl<B: ScopedBitRead> Reader for UperReader<B> {
             };
 
             let mut buffer = vec![0u8; len as usize];
-            for i in 0..len as usize {
-                r.bits.read_bits_with_offset(&mut buffer[i..i + 1], 4)?;
-                match buffer[i] {
-                    0_u8 => buffer[i] = 32_u8,
-                    c => buffer[i] = 32_u8 + 15 + c,
-                }
+            for byte in &mut buffer {
+                *byte = match r.bits.read_bits_u64(4)? as u8 {
+                    0_u8 => 32_u8,
+                    c => 32_u8 + 15 + c,
+                };
             }
 
             String::from_utf8(buffer).map_err(|e| ErrorKind::FromUtf8Error(e).into())
@@ -1285,9 +1411,9 @@ impl<B: ScopedBitRead> Reader for UperReader<B> {
             };
 
             let mut buffer = vec![0u8; len as usize];
-            buffer
-                .chunks_exact_mut(1)
-                .try_for_each(|chunk| r.bits.read_bits_with_offset(chunk, 1))?;
+            for byte in &mut buffer {
+                *byte = r.bits.read_bits_u64(7)? as u8;
+            }
 
             String::from_utf8(buffer).map_err(|e| ErrorKind::FromUtf8Error(e).into())
         });
@@ -1315,9 +1441,9 @@ impl<B: ScopedBitRead> Reader for UperReader<B> {
             };
 
             let mut buffer = vec![0u8; len as usize];
-            buffer
-                .chunks_exact_mut(1)
-                .try_for_each(|chunk| r.bits.read_bits_with_offset(chunk, 1))?;
+            for byte in &mut buffer {
+                *byte = r.bits.read_bits_u64(7)? as u8;
+            }
 
             String::from_utf8(buffer).map_err(|e| ErrorKind::FromUtf8Error(e).into())
         });
@@ -1331,20 +1457,38 @@ impl<B: ScopedBitRead> Reader for UperReader<B> {
 
     #[inline]
     fn read_octet_string<C: octetstring::Constraint>(&mut self) -> Result<Vec<u8>, Self::Error> {
+        self.read_octet_string_as::<C, Vec<u8>>()
+    }
+
+    #[inline]
+    fn read_octet_string_as<
+        Constraint: octetstring::Constraint,
+        Octets: octetstring::OctetStringType,
+    >(
+        &mut self,
+    ) -> Result<Octets, Self::Error> {
         #[cfg(feature = "descriptive-deserialize-errors")]
         self.scope_description
-            .push(ScopeDescription::octet_string::<C>());
+            .push(ScopeDescription::octet_string::<Constraint>());
 
         let _ = self.read_bit_field_entry(false)?;
         #[allow(clippy::let_and_return)]
-        let result = self.with_buffer(|r| r.bits.read_octetstring(C::MIN, C::MAX, C::EXTENSIBLE));
+        let result = if Constraint::TRAILING {
+            self.read_trailing_octets::<Constraint, Octets>()
+        } else {
+            self.with_buffer(|r| {
+                r.bits
+                    .read_octetstring_as(Constraint::MIN, Constraint::MAX, Constraint::EXTENSIBLE)
+            })
+        };
 
         #[cfg(feature = "descriptive-deserialize-errors")]
         self.scope_description.push(ScopeDescription::Result(
             result
                 .as_ref()
                 .map(|s| {
-                    s.iter()
+                    s.as_octets()
+                        .iter()
                         .map(|v| format!("{v:02x}"))
                         .collect::<Vec<_>>()
                         .join(" ")
@@ -1410,6 +1554,28 @@ impl<B: ScopedBitRead> Reader for UperReader<B> {
         Ok(Null)
     }
 }
+
+/// The size constraint of an OCTET STRING with `[PER: TRAILING]`, which the reader and the writer
+/// check alike.
+trait TrailingOctetsConstraint: octetstring::Constraint {
+    /// Fails if `byte_len` octets are not within the size constraint.
+    ///
+    /// Without a length determinant, the encoding cannot tell whether the size is within the
+    /// extension of an extensible size constraint, so any size satisfies an extensible constraint.
+    #[inline]
+    fn ensure_trailing_size(byte_len: usize) -> Result<(), Error> {
+        let len = byte_len as u64;
+        let min = const_unwrap_or!(Self::MIN, 0);
+        let max = const_unwrap_or!(Self::MAX, i64::MAX as u64);
+        if !Self::EXTENSIBLE && (len < min || len > max) {
+            Err(ErrorKind::SizeNotInRange(len, min, max).into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<Constraint: octetstring::Constraint> TrailingOctetsConstraint for Constraint {}
 
 pub trait UperDecodable<'a, B: ScopedBitRead> {
     fn decode_from_uper(bits: B) -> Result<Self, Error>

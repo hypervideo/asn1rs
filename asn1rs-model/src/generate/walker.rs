@@ -86,7 +86,13 @@ impl AsnDefWriter {
                 "{}{:?}String<{}Constraint>",
                 CRATE_SYN_PREFIX, charset, name
             ),
-            RustType::VecU8(_) => format!("{}OctetString<{}Constraint>", CRATE_SYN_PREFIX, name),
+            RustType::OctetString(_, None) => {
+                format!("{}OctetString<{}Constraint>", CRATE_SYN_PREFIX, name)
+            }
+            RustType::OctetString(_, Some(rust_type)) => format!(
+                "{}OctetString<{}Constraint, {}>",
+                CRATE_SYN_PREFIX, name, rust_type
+            ),
             RustType::BitVec(_) => format!("{}BitString<{}Constraint>", CRATE_SYN_PREFIX, name),
             RustType::Null => format!("{}NullT", CRATE_SYN_PREFIX),
             RustType::Vec(inner, _, ordering) => {
@@ -348,13 +354,23 @@ impl AsnDefWriter {
                     size,
                 )
             }
-            RustType::VecU8(size) => {
+            RustType::OctetString(octets, _) => {
                 Self::write_common_constraint_type(
                     scope,
                     constraint_type_name,
                     field.tag.unwrap_or(Tag::DEFAULT_OCTET_STRING),
                 );
-                Self::write_size_constraint("octetstring", scope, constraint_type_name, size)
+                Self::write_size_constraint_with(
+                    "octetstring",
+                    scope,
+                    constraint_type_name,
+                    &octets.size,
+                    if octets.trailing {
+                        &["const TRAILING: bool = true;"]
+                    } else {
+                        &[]
+                    },
+                )
             }
             RustType::BitVec(size) => {
                 Self::write_common_constraint_type(
@@ -719,6 +735,16 @@ impl AsnDefWriter {
         constraint_type_name: &str,
         size: &Size,
     ) {
+        Self::write_size_constraint_with(module, scope, constraint_type_name, size, &[])
+    }
+
+    fn write_size_constraint_with(
+        module: &str,
+        scope: &mut Scope,
+        constraint_type_name: &str,
+        size: &Size,
+        additional_lines: &[&str],
+    ) {
         scope.raw(&format!(
             "impl {}{}::Constraint for {} {{",
             CRATE_SYN_PREFIX, module, constraint_type_name
@@ -730,6 +756,9 @@ impl AsnDefWriter {
             scope.raw(&format!("const MAX: Option<u64> = Some({});", max));
         }
         scope.raw(&format!("const EXTENSIBLE: bool = {};", size.extensible()));
+        for line in additional_lines {
+            scope.raw(*line);
+        }
         scope.raw("}");
     }
 

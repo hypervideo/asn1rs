@@ -3,7 +3,7 @@ use super::range::ident_or_literal_or_punct;
 use super::range::IntegerRange;
 use super::tag::AttrTag;
 use crate::asn::{Charset, Choice, ChoiceVariant, Enumerated, EnumeratedVariant};
-use crate::asn::{Range, Size, Tag, Type};
+use crate::asn::{OctetString, Range, Size, Tag, Type};
 use crate::model::LiteralValue;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -110,7 +110,15 @@ fn parse_type_pre_stepped<'a>(
     match lowercase_ident {
         // "utf8string" => parse_opt_size_or_any(input).map(|size| Type::String(size, Charset::Utf8)),
         // "ia5string" => parse_opt_size_or_any(input).map(|size| Type::String(size, Charset::Ia5)),
-        "octet_string" => parse_opt_size_or_any(input).map(Type::OctetString),
+        "octet_string" => {
+            if input.peek(token::Paren) {
+                let content;
+                parenthesized!(content in input);
+                content.parse().map(Type::OctetString)
+            } else {
+                Ok(Type::OctetString(OctetString::with_size(Size::Any)))
+            }
+        }
         "bit_string" => parse_opt_size_or_any(input).map(Type::bit_vec_with_size),
         string if string.ends_with("string") => {
             let len = string.chars().count();
@@ -266,6 +274,32 @@ fn parse_opt_size_or_any(input: ParseStream) -> syn::Result<Size> {
                 )))
             }
         }
+    }
+}
+
+/// The arguments of `octet_string(..)`: `size(..)` and `trailing`, in any order.
+impl Parse for OctetString {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut octets = OctetString::with_size(Size::Any);
+        while !input.is_empty() {
+            let ident = parse_ident(input, "Expected size or trailing")?.to_lowercase();
+            match ident.as_str() {
+                "size" => {
+                    let size_content;
+                    parenthesized!(size_content in input);
+                    octets.size = Size::parse(&size_content)?;
+                }
+                "trailing" => octets.trailing = true,
+                _ => {
+                    return Err(input.error(format!(
+                        "Invalid identifier, expected size or trailing but got: {}",
+                        ident
+                    )))
+                }
+            }
+            eof_or_comma(input, "Expected a comma or the end of the arguments")?;
+        }
+        Ok(octets)
     }
 }
 

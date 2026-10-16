@@ -2,11 +2,27 @@ use super::*;
 use crate::protocol::per::Error;
 use crate::protocol::per::ErrorKind;
 
-#[derive(Debug, Default)]
+/// Zeroed bytes kept after the content, so that writes near its end can store whole words.
+const WRITE_SLACK: usize = core::mem::size_of::<u64>();
+
+#[derive(Default)]
 pub struct BitBuffer {
+    /// The content, followed by zeros up to the length of the vector.
     pub(crate) buffer: Vec<u8>,
+    /// The length of the content in bytes.
+    pub(crate) len: usize,
     pub(crate) write_position: usize,
     pub(crate) read_position: usize,
+}
+
+impl core::fmt::Debug for BitBuffer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BitBuffer")
+            .field("buffer", &self.content())
+            .field("write_position", &self.write_position)
+            .field("read_position", &self.read_position)
+            .finish()
+    }
 }
 
 impl BitBuffer {
@@ -25,6 +41,7 @@ impl BitBuffer {
     pub fn from_bits(buffer: Vec<u8>, bit_length: usize) -> Self {
         assert!(bit_length <= buffer.len() * BYTE_LEN);
         Self {
+            len: buffer.len(),
             buffer,
             write_position: bit_length,
             read_position: 0,
@@ -39,6 +56,7 @@ impl BitBuffer {
         assert!(write_position <= buffer.len() * BYTE_LEN);
         assert!(read_position <= buffer.len() * BYTE_LEN);
         Self {
+            len: buffer.len(),
             buffer,
             write_position,
             read_position,
@@ -46,7 +64,9 @@ impl BitBuffer {
     }
 
     pub fn clear(&mut self) {
-        self.buffer.clear();
+        // keep the zeroed bytes, so that writing again does not need to grow the buffer
+        self.buffer[..self.len].fill(0);
+        self.len = 0;
         self.write_position = 0;
         self.read_position = 0;
     }
@@ -56,7 +76,7 @@ impl BitBuffer {
     }
 
     pub fn content(&self) -> &[u8] {
-        &self.buffer
+        &self.buffer[..self.len]
     }
 
     pub const fn bit_len(&self) -> usize {
@@ -64,7 +84,7 @@ impl BitBuffer {
     }
 
     pub fn byte_len(&self) -> usize {
-        self.buffer.len()
+        self.len
     }
 
     /// Changes the write-position to the given position for the closure call.
@@ -74,7 +94,7 @@ impl BitBuffer {
     /// Positions beyond the current buffer length will result in panics.
     #[inline]
     pub fn with_write_position_at<T, F: Fn(&mut Self) -> T>(&mut self, position: usize, f: F) -> T {
-        debug_assert!(position <= self.buffer.len() * 8);
+        debug_assert!(position <= self.len * 8);
         let before = core::mem::replace(&mut self.write_position, position);
         let result = f(self);
         self.write_position = before;
@@ -105,18 +125,54 @@ impl BitBuffer {
         result
     }
 
+    #[inline]
     pub fn ensure_can_write_additional_bits(&mut self, bit_len: usize) {
-        if self.write_position + bit_len >= self.buffer.len() * BYTE_LEN {
-            let required_len = ((self.write_position + bit_len) + 7) / BYTE_LEN;
-            let extend_by_len = required_len - self.buffer.len();
-            self.buffer
-                .extend(core::iter::repeat(0u8).take(extend_by_len))
+        let required_len = (self.write_position + bit_len).div_ceil(BYTE_LEN);
+        if required_len > self.len {
+            if required_len + WRITE_SLACK > self.buffer.len() {
+                self.grow(required_len);
+            }
+            self.len = required_len;
+        }
+    }
+
+    /// Appends the bytes of `src` to the content, which ends at an octet boundary.
+    ///
+    /// Unlike growing the buffer and copying `src` into it, this does not zero the space for `src`
+    /// first.
+    #[inline(never)]
+    fn extend_content(&mut self, src: &[u8]) {
+        self.buffer.truncate(self.len);
+        self.buffer.extend_from_slice(src);
+        self.len = self.buffer.len();
+        self.write_position = self.len * BYTE_LEN;
+        let len_with_slack = (self.len + WRITE_SLACK).min(self.buffer.capacity());
+        self.buffer.resize(len_with_slack, 0);
+    }
+
+    #[inline(never)]
+    fn grow(&mut self, required_len: usize) {
+        // Zero ahead, so that most writes neither need to grow the buffer nor store byte-wise at
+        // its end.
+        let wanted_len = (required_len + WRITE_SLACK)
+            .max(2 * self.buffer.len())
+            .max(64);
+        // But do not reallocate a buffer whose capacity fits the content. Only the writes into the
+        // last few bytes then store byte-wise.
+        let len = if required_len <= self.buffer.capacity() {
+            wanted_len.min(self.buffer.capacity())
+        } else {
+            wanted_len
+        };
+        if len > self.buffer.len() {
+            self.buffer.resize(len, 0);
         }
     }
 }
 
 impl From<BitBuffer> for Vec<u8> {
-    fn from(bb: BitBuffer) -> Vec<u8> {
+    fn from(mut bb: BitBuffer) -> Vec<u8> {
+        bb.buffer.truncate(bb.len);
         bb.buffer
     }
 }
@@ -131,7 +187,7 @@ impl BitRead for BitBuffer {
     #[inline]
     fn read_bit(&mut self) -> Result<bool, Error> {
         if self.read_position < self.write_position {
-            BitRead::read_bit(&mut (&self.buffer[..], &mut self.read_position))
+            BitRead::read_bit(&mut (&self.buffer[..self.len], &mut self.read_position))
         } else {
             Err(ErrorKind::EndOfStream.into())
         }
@@ -139,7 +195,10 @@ impl BitRead for BitBuffer {
 
     #[inline]
     fn read_bits(&mut self, dst: &mut [u8]) -> Result<(), Error> {
-        BitRead::read_bits(&mut (&self.buffer[..], &mut self.read_position), dst)
+        BitRead::read_bits(
+            &mut (&self.buffer[..self.len], &mut self.read_position),
+            dst,
+        )
     }
 
     #[inline]
@@ -149,7 +208,7 @@ impl BitRead for BitBuffer {
         dst_bit_offset: usize,
     ) -> Result<(), Error> {
         BitRead::read_bits_with_offset(
-            &mut (&self.buffer[..], &mut self.read_position),
+            &mut (&self.buffer[..self.len], &mut self.read_position),
             dst,
             dst_bit_offset,
         )
@@ -158,7 +217,7 @@ impl BitRead for BitBuffer {
     #[inline]
     fn read_bits_with_len(&mut self, dst: &mut [u8], dst_bit_len: usize) -> Result<(), Error> {
         BitRead::read_bits_with_len(
-            &mut (&self.buffer[..], &mut self.read_position),
+            &mut (&self.buffer[..self.len], &mut self.read_position),
             dst,
             dst_bit_len,
         )
@@ -172,10 +231,18 @@ impl BitRead for BitBuffer {
         dst_bit_len: usize,
     ) -> Result<(), Error> {
         BitRead::read_bits_with_offset_len(
-            &mut (&self.buffer[..], &mut self.read_position),
+            &mut (&self.buffer[..self.len], &mut self.read_position),
             dst,
             dst_bit_offset,
             dst_bit_len,
+        )
+    }
+
+    #[inline]
+    fn read_bits_u64(&mut self, bit_len: usize) -> Result<u64, Error> {
+        BitRead::read_bits_u64(
+            &mut (&self.buffer[..self.len], &mut self.read_position),
+            bit_len,
         )
     }
 }
@@ -189,6 +256,13 @@ impl BitWrite for BitBuffer {
 
     #[inline]
     fn write_bits(&mut self, src: &[u8]) -> Result<(), Error> {
+        // Whole bytes at the end of the content that do not fit into the zeroed slack
+        if self.write_position == self.len * BYTE_LEN
+            && self.len + src.len() + WRITE_SLACK > self.buffer.len()
+        {
+            self.extend_content(src);
+            return Ok(());
+        }
         self.ensure_can_write_additional_bits(src.len() * BYTE_LEN);
         BitWrite::write_bits(&mut (&mut self.buffer[..], &mut self.write_position), src)
     }
@@ -226,6 +300,18 @@ impl BitWrite for BitBuffer {
             src,
             src_bit_offset,
             src_bit_len,
+        )
+    }
+
+    #[inline]
+    fn write_bits_u64(&mut self, value: u64, bit_len: usize) -> Result<(), Error> {
+        // check before growing the buffer by an unreasonable `bit_len`
+        ensure_u64_bit_len(bit_len)?;
+        self.ensure_can_write_additional_bits(bit_len);
+        BitWrite::write_bits_u64(
+            &mut (&mut self.buffer[..], &mut self.write_position),
+            value,
+            bit_len,
         )
     }
 }
@@ -305,6 +391,11 @@ impl BitRead for Bits<'_> {
             dst_bit_offset,
             dst_bit_len,
         )
+    }
+
+    #[inline]
+    fn read_bits_u64(&mut self, bit_len: usize) -> Result<u64, Error> {
+        BitRead::read_bits_u64(&mut (self.slice, &mut self.pos), bit_len)
     }
 }
 
@@ -995,6 +1086,232 @@ pub mod tests {
         assert_eq!(1, read_once(&[0x40], 2, 2)?);
         assert_eq!(2, read_once(&[0x80], 8, 2)?);
         assert_eq!(3, read_once(&[0x81], 8, 2)?);
+        Ok(())
+    }
+
+    /// Forwards only the required methods, so that the default implementations of the provided
+    /// methods are used.
+    struct DefaultMethods<T>(T);
+
+    impl BitWrite for DefaultMethods<&mut BitBuffer> {
+        fn write_bit(&mut self, bit: bool) -> Result<(), Error> {
+            self.0.write_bit(bit)
+        }
+
+        fn write_bits(&mut self, src: &[u8]) -> Result<(), Error> {
+            self.0.write_bits(src)
+        }
+
+        fn write_bits_with_offset(&mut self, src: &[u8], offset: usize) -> Result<(), Error> {
+            self.0.write_bits_with_offset(src, offset)
+        }
+
+        fn write_bits_with_len(&mut self, src: &[u8], len: usize) -> Result<(), Error> {
+            self.0.write_bits_with_len(src, len)
+        }
+
+        fn write_bits_with_offset_len(
+            &mut self,
+            src: &[u8],
+            offset: usize,
+            len: usize,
+        ) -> Result<(), Error> {
+            self.0.write_bits_with_offset_len(src, offset, len)
+        }
+    }
+
+    impl BitRead for DefaultMethods<Bits<'_>> {
+        fn read_bit(&mut self) -> Result<bool, Error> {
+            self.0.read_bit()
+        }
+
+        fn read_bits(&mut self, dst: &mut [u8]) -> Result<(), Error> {
+            self.0.read_bits(dst)
+        }
+
+        fn read_bits_with_offset(&mut self, dst: &mut [u8], offset: usize) -> Result<(), Error> {
+            self.0.read_bits_with_offset(dst, offset)
+        }
+
+        fn read_bits_with_len(&mut self, dst: &mut [u8], len: usize) -> Result<(), Error> {
+            self.0.read_bits_with_len(dst, len)
+        }
+
+        fn read_bits_with_offset_len(
+            &mut self,
+            dst: &mut [u8],
+            offset: usize,
+            len: usize,
+        ) -> Result<(), Error> {
+            self.0.read_bits_with_offset_len(dst, offset, len)
+        }
+    }
+
+    const U64_FIELDS: [(u64, usize); 10] = [
+        (0b101, 3),
+        (0, 0),
+        (0xFFFF_FFFF_FFFF_FFFF, 64),
+        (0x1234, 16),
+        (1, 1),
+        // bits beyond `bit_len` are ignored
+        (0xFFFF_FF00 | 0x5A, 7),
+        (0x7FFF_FFFF_FFFF_FFFF, 63),
+        (0x2A, 6),
+        (0x0123_4567_89AB_CDEF, 64),
+        (0x3_FFFF, 18),
+    ];
+
+    fn low_bits(value: u64, bit_len: usize) -> u64 {
+        if bit_len == 0 {
+            0
+        } else {
+            value & (u64::MAX >> (64 - bit_len))
+        }
+    }
+
+    #[test]
+    fn bit_buffer_u64_bits_match_default_methods() -> Result<(), Error> {
+        let mut native = BitBuffer::default();
+        let mut default = BitBuffer::default();
+        for (value, bit_len) in U64_FIELDS {
+            native.write_bits_u64(value, bit_len)?;
+            DefaultMethods(&mut default).write_bits_u64(value, bit_len)?;
+        }
+        assert_eq!(default.content(), native.content());
+        assert_eq!(default.bit_len(), native.bit_len());
+
+        let mut bits = Bits::from(&native);
+        let mut default_bits = DefaultMethods(Bits::from(&native));
+        for (value, bit_len) in U64_FIELDS {
+            assert_eq!(low_bits(value, bit_len), bits.read_bits_u64(bit_len)?);
+            assert_eq!(
+                low_bits(value, bit_len),
+                default_bits.read_bits_u64(bit_len)?
+            );
+        }
+        assert_eq!(0, bits.remaining());
+
+        for (value, bit_len) in U64_FIELDS {
+            assert_eq!(low_bits(value, bit_len), native.read_bits_u64(bit_len)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_u64_bits_reject_invalid_lengths() {
+        let mut buffer = BitBuffer::default();
+        assert_eq!(
+            Err(ErrorKind::BitLenNotInRange(65, 0, 64).into()),
+            buffer.write_bits_u64(0, 65)
+        );
+        assert_eq!(0, buffer.byte_len());
+
+        buffer.write_bits_u64(0x7F, 7).unwrap();
+        let mut bits = Bits::from(&buffer);
+        assert_eq!(
+            Err(ErrorKind::BitLenNotInRange(65, 0, 64).into()),
+            bits.read_bits_u64(65)
+        );
+        assert_eq!(
+            Err(Error::insufficient_data_in_source_buffer()),
+            bits.read_bits_u64(9)
+        );
+        assert_eq!(Ok(0x7F), bits.read_bits_u64(7));
+
+        let mut slice = [0u8; 1];
+        let mut pos = 2;
+        assert_eq!(
+            Err(Error::insufficient_space_in_destination_buffer()),
+            (&mut slice[..], &mut pos).write_bits_u64(0, 7)
+        );
+        assert_eq!(2, pos);
+    }
+
+    #[test]
+    fn bit_buffer_slack_is_not_part_of_the_content() -> Result<(), Error> {
+        let mut buffer = BitBuffer::default();
+        buffer.write_bits_u64(0b101, 3)?;
+        assert_eq!(&[0b1010_0000], buffer.content());
+        assert_eq!(1, buffer.byte_len());
+        assert!(buffer.buffer.len() > buffer.byte_len());
+        assert_eq!(
+            "BitBuffer { buffer: [160], write_position: 3, read_position: 0 }",
+            format!("{buffer:?}")
+        );
+
+        // reads stop at the end of the content, not at the end of the slack
+        assert_eq!(Ok(0b101), buffer.read_bits_u64(3));
+        assert_eq!(Ok(0), buffer.read_bits_u64(5));
+        assert_eq!(
+            Err(Error::insufficient_data_in_source_buffer()),
+            buffer.read_bits_u64(1)
+        );
+
+        let bytes: Vec<u8> = buffer.into();
+        assert_eq!(vec![0b1010_0000], bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_does_not_reallocate_when_the_capacity_fits_the_content() -> Result<(), Error> {
+        let mut buffer = BitBuffer::with_capacity(100);
+        let capacity = buffer.buffer.capacity();
+        for i in 0..capacity as u64 {
+            buffer.write_bits_u64(i, 8)?;
+        }
+        assert_eq!(capacity, buffer.buffer.capacity());
+        assert_eq!(capacity, buffer.byte_len());
+        assert!(buffer
+            .content()
+            .iter()
+            .copied()
+            .eq((0..capacity).map(|i| i as u8)));
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_write_bits_appends_whole_bytes_to_the_content() -> Result<(), Error> {
+        for (capacity, len) in [(0, 3), (0, 100), (4, 3), (1000, 100)] {
+            let src = (0..len).map(|i| i as u8 + 1).collect::<Vec<u8>>();
+            let mut buffer = BitBuffer::with_capacity(capacity);
+            buffer.write_bits_u64(0xAB, 8)?;
+            buffer.write_bits(&src)?;
+            buffer.write_bit(true)?;
+
+            let mut expected = vec![0xAB];
+            expected.extend_from_slice(&src);
+            expected.push(0b1000_0000);
+            assert_eq!(&expected[..], buffer.content(), "capacity {capacity}");
+            assert_eq!((len + 1) * 8 + 1, buffer.bit_len());
+            assert!(buffer.buffer[buffer.byte_len()..].iter().all(|b| *b == 0));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_write_bits_does_not_reallocate_when_the_capacity_fits_the_content(
+    ) -> Result<(), Error> {
+        let mut buffer = BitBuffer::with_capacity(101);
+        let capacity = buffer.buffer.capacity();
+        buffer.write_bits_u64(0xAB, 8)?;
+        buffer.write_bits(&[0x5A; 100])?;
+        assert_eq!(capacity, buffer.buffer.capacity());
+        assert_eq!(101, buffer.byte_len());
+        assert_eq!(0xAB, buffer.content()[0]);
+        assert!(buffer.content()[1..].iter().all(|b| *b == 0x5A));
+        Ok(())
+    }
+
+    #[test]
+    fn bit_buffer_clear_keeps_no_content() -> Result<(), Error> {
+        let mut buffer = BitBuffer::default();
+        buffer.write_bits(&[0xFF; 40])?;
+        buffer.clear();
+        assert_eq!(0, buffer.byte_len());
+        buffer.write_bits_u64(0b1, 1)?;
+        buffer.write_bits_with_len(&[0; 2], 12)?;
+        assert_eq!(&[0b1000_0000, 0b0000_0000], buffer.content());
+        assert!(buffer.buffer[buffer.byte_len()..].iter().all(|b| *b == 0));
         Ok(())
     }
 }
