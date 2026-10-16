@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - `BitRead::read_bits_u64` and `BitWrite::write_bits_u64` to read and write up to 64 bits as an
    integer, with default implementations for existing implementors of the traits
  - UPER benchmark in `benches/uper.rs`, which also runs on `wasm32-wasip1`
+ - `RustCodeGenerator::add_field_attr` to add attributes to fields and variants
 ### Changed
  - Implement UperReader for ScopedBitReader over Bits ([aa6b083], [gh-81], [@jkalez])
  - Faster UPER encoding and decoding, see [PERFORMANCE.md](PERFORMANCE.md): bit copies word
