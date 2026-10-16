@@ -30,7 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Faster UPER encoding and decoding, see [PERFORMANCE.md](PERFORMANCE.md): bit copies word
    at a time, vector kernels for unaligned bulk copies (SSE2, NEON, and `simd128` when compiling
    for wasm32 with `-C target-feature=+simd128`), integers without a detour through byte arrays,
-   and zeroed slack after the content of a `BitBuffer`
+   zeroed slack after the content of a `BitBuffer`, and octet-aligned bytes appended to a
+   `BitBuffer` without zeroing them first
  - Copying a bit range keeps the destination bits after the range. Before, copies of more than
    16 bits between different bit offsets within a byte cleared the rest of the last destination
    byte

@@ -41,6 +41,7 @@ The changes so far:
 | 8 | Store bits byte-wise on wasm32 |
 | 9 | Add the PER encoding instruction `[PER: TRAILING]` for `OCTET STRING` (a feature, no speedup) |
 | – | Benchmark `[PER: TRAILING]` with the fields of the appending variant (changes a benchmark, no code change) |
+| 10 | Append octet-aligned bytes to a `BitBuffer` without zeroing them first |
 
 The encoded bytes do not change. After every change, a differential test encoded 4000 random
 datagrams and 4000 random string sequences (about 11.7 MB of output) and compared the output byte
@@ -121,6 +122,10 @@ on arm64 took about 230 ns instead of 150 ns, and so did the parent with only th
 of the new benchmarks added, which calls no new code: on arm64, that benchmark depends on the code
 that the benchmark binary contains elsewhere. Change 9 runs with the `bytes` feature, the parent
 without it.
+
+Change 10 was measured in three more runs, against the commit before it, which changed the
+benchmark. Both ran their own `benches/uper.rs`, which is the same file, with the `bytes` feature.
+The nested variants of that benchmark ran in the same runs, with the code of change 9.
 
 Experiments were measured as A/B comparisons while the changes were made, on the same machine and
 on the same day, by switching back and forth between two versions of the code.
@@ -482,7 +487,7 @@ On arm64, `[PER: TRAILING]` with `Bytes` encodes and decodes as fast as appendin
 x86_64 and wasm32, it encodes 12–16 ns (5–7%) slower, which on x86_64 is within the typical noise.
 The writer gets enough capacity for the whole datagram, but `BitBuffer` fills the space it grows
 into with zeros before the data is copied there, which appending avoids. That zero fill is the
-likely cause, but it was not measured separately. On wasm32, decoding into `Bytes` is 13–14 ns
+cause, see [change 10](#10-appending-octet-aligned-bytes-without-zeroing-them-first). On wasm32, decoding into `Bytes` is 13–14 ns
 (7–8%) slower than slicing, which mostly came from the benchmark (see
 [Benchmark: `[PER: TRAILING]` with the fields of `append`](#benchmark-per-trailing-with-the-fields-of-append)).
 Decoding into a `Vec<u8>` copies the data and takes 40–70 ns longer than into a `Bytes`.
@@ -532,6 +537,47 @@ code of change 9, nested → flat:
 
 `append` does not change. Without the nested `SEQUENCE`, decoding into `Bytes` takes as long as
 slicing, except on wasm32 +simd128, where it is 3% slower.
+
+### 10. Appending octet-aligned bytes without zeroing them first
+
+`BitBuffer` grows by filling its vector with zeros (change 7), which the writes then overwrite. For
+the data of an `OCTET STRING` with `[PER: TRAILING]`, it zeroed as many bytes as it then copied,
+while appending the data after the encoding skipped the zero fill. `write_bits` now extends the
+vector with the bytes directly when they start at the end of the content, at an octet boundary,
+and do not fit into the zeroed slack. Afterwards, it adds the zeroed slack again if the capacity
+allows it without reallocating.
+
+| Benchmark | arm64 | x86_64 (Rosetta) | wasm32 | wasm32 +simd128 |
+|---|---:|---:|---:|---:|
+| `datagram/video_fragment_1200/append/encode` | 134 → 134 | 217 → 216 | 229 → 230 | 227 → 227 |
+| `datagram/video_fragment_1200/trailing_vec/encode` | 122 → 109 | 220 → 215 | 242 → 220 | 238 → 218 |
+| `datagram/video_fragment_1200/trailing_bytes/encode` | 122 → 109 | 226 → 220 | 240 → 220 | 238 → 218 |
+| `datagram/video_fragment_1200/append/decode` | 86.3 → 86.0 | 136 → 135 | 183 → 183 | 177 → 178 |
+| `datagram/video_fragment_1200/trailing_bytes/decode` | 80.4 → 79.9 | 140 → 135 | 183 → 183 | 183 → 183 |
+
+With `[PER: TRAILING]` and `Bytes`, encoding a video fragment is now 19% faster than appending
+the data on arm64 and 4% faster on wasm32, and on x86_64 2% slower, which is within the noise.
+Decoding takes as long as slicing, except on wasm32 +simd128, where it is 3% slower.
+
+The other benchmarks do not change beyond the noise:
+
+| Benchmark | arm64 before → after (ns) | arm64 | x86_64 (Rosetta) | wasm32 | wasm32 +simd128 |
+|---|---:|---:|---:|---:|---:|
+| `datagram/video_fragment/encode` | 96.1 → 96.5 | 1.00× | 1.01× | 1.00× | 1.00× |
+| `datagram/transport_feedback_64/encode` | 1,182 → 1,176 | 1.00× | 1.01× | 0.99× | 0.99× |
+| `datagram/padding_64/encode` | 72.9 → 72.0 | 1.01× | 1.04× | 1.00× | 0.98× |
+| `datagram/padding_1200/encode` | 91.1 → 92.6 | 0.98× | 1.01× | 1.00× | 0.98× |
+| `datagram/padding_16000/encode` | 408 → 433 | 0.94× | 1.01× | 1.01× | 0.99× |
+| `strings/profile/encode` | 236 → 244 | 0.97× | 1.13× | 0.98× | 0.98× |
+| `bits/write_unaligned_1200` | 33.9 → 34.0 | 1.00× | 1.03× | 1.00× | 0.99× |
+| `bits/write_unaligned_16000` | 361 → 347 | 1.04× | 1.01× | 1.01× | 0.99× |
+| `fields/write_256_mixed_ints` | 454 → 437 | 1.04× | 1.01× | 1.00× | 1.00× |
+
+`datagram/padding_16000/encode` writes its 16000 bytes at an unaligned position, which does not
+take the new path. Its three medians on arm64 overlap, 408–434 ns before and 433–454 ns after.
+
+The encoded bytes do not change: the differential test of change 9 gives the same output with
+change 10.
 
 ## Experiments that did not pay off
 
@@ -787,9 +833,6 @@ Without simd128, both read experiments showed the same speedups within five perc
   byte-wise nor a size threshold helped (see
   [Byte-wise stores and reads on wasm32](#byte-wise-stores-and-reads-on-wasm32)), but a decoder
   that keeps the stream in little endian words could avoid the swaps.
-- `BitBuffer` zeroes the space it grows into, also when an aligned copy of many bytes will
-  overwrite it right away. Encoding with `[PER: TRAILING]` is probably slower than appending on
-  x86_64 and wasm32 because of that (see [change 9](#9-per-trailing)).
 - On arm64, `fields/read_256_mixed_ints` takes 150 ns or 230–340 ns, depending on unrelated code in
   the benchmark binary (see [The series](#the-series)).
 
@@ -930,6 +973,41 @@ Measured in separate runs with the parent commit as the baseline (column 8), see
 | `fields/write_256_mixed_ints` | 420 | 440 | 1,245 | 1,216 | 982 | 990 | 990 | 968 |
 | `fields/write_256_mixed_ints_slice` | 664 | 657 | 1,365 | 1,352 | 698 | 698 | 695 | 702 |
 | `fields/read_256_mixed_ints` | 141 | 141 | 270 | 269 | 442 | 447 | 435 | 435 |
+
+### Change 10
+
+Measured in separate runs with the commit before it as the baseline (column 9), see
+[The series](#the-series).
+
+| Benchmark | arm64 9 | arm64 10 | x86_64 9 | x86_64 10 | wasm32 9 | wasm32 10 | +simd128 9 | +simd128 10 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `datagram/video_fragment/encode` | 96.1 | 96.5 | 175 | 173 | 200 | 201 | 200 | 199 |
+| `datagram/video_fragment/decode` | 102 | 101 | 156 | 156 | 183 | 184 | 182 | 183 |
+| `datagram/transport_feedback_64/encode` | 1,182 | 1,176 | 1,846 | 1,832 | 1,941 | 1,958 | 1,888 | 1,909 |
+| `datagram/transport_feedback_64/decode` | 1,109 | 1,107 | 1,669 | 1,696 | 1,862 | 1,873 | 1,873 | 1,889 |
+| `datagram/padding_64/encode` | 72.9 | 72.0 | 102 | 98.8 | 104 | 104 | 100 | 102 |
+| `datagram/padding_64/decode` | 39.2 | 39.2 | 67.1 | 68.2 | 77.4 | 77.8 | 75.4 | 75.8 |
+| `datagram/padding_1200/encode` | 91.1 | 92.6 | 180 | 178 | 181 | 181 | 137 | 140 |
+| `datagram/padding_1200/decode` | 67.3 | 66.0 | 138 | 140 | 155 | 155 | 111 | 112 |
+| `datagram/padding_16000/encode` | 408 | 433 | 1,056 | 1,045 | 1,198 | 1,183 | 618 | 628 |
+| `datagram/padding_16000/decode` | 399 | 388 | 1,007 | 1,006 | 1,168 | 1,161 | 596 | 616 |
+| `strings/profile/encode` | 236 | 244 | 522 | 461 | 352 | 360 | 357 | 364 |
+| `strings/profile/decode` | 120 | 119 | 195 | 188 | 228 | 228 | 230 | 229 |
+| `bits/write_unaligned_16` | 11.0 | 10.8 | 23.8 | 21.5 | 16.3 | 16.9 | 16.7 | 17.7 |
+| `bits/read_unaligned_16` | 3.9 | 4.1 | 9.6 | 7.2 | 8.8 | 8.8 | 9.0 | 9.1 |
+| `bits/write_unaligned_1200` | 33.9 | 34.0 | 82.0 | 79.8 | 93.9 | 93.6 | 51.9 | 52.3 |
+| `bits/read_unaligned_1200` | 19.2 | 19.2 | 64.6 | 62.5 | 77.0 | 77.1 | 35.3 | 35.4 |
+| `bits/write_unaligned_16000` | 361 | 347 | 961 | 951 | 1,087 | 1,077 | 536 | 541 |
+| `bits/read_unaligned_16000` | 213 | 213 | 828 | 819 | 966 | 967 | 406 | 407 |
+| `fields/write_256_mixed_ints` | 454 | 437 | 1,243 | 1,234 | 1,117 | 1,118 | 1,103 | 1,106 |
+| `fields/write_256_mixed_ints_slice` | 691 | 681 | 1,358 | 1,350 | 697 | 696 | 698 | 698 |
+| `fields/read_256_mixed_ints` | 215 | 210 | 274 | 273 | 507 | 509 | 523 | 522 |
+| `datagram/video_fragment_1200/append/decode` | 86.3 | 86.0 | 136 | 135 | 183 | 183 | 177 | 178 |
+| `datagram/video_fragment_1200/trailing_vec/decode` | 140 | 146 | 211 | 208 | 232 | 232 | 228 | 231 |
+| `datagram/video_fragment_1200/trailing_bytes/decode` | 80.4 | 79.9 | 140 | 135 | 183 | 183 | 183 | 183 |
+| `datagram/video_fragment_1200/append/encode` | 134 | 134 | 217 | 216 | 229 | 230 | 227 | 227 |
+| `datagram/video_fragment_1200/trailing_vec/encode` | 122 | 109 | 220 | 215 | 242 | 220 | 238 | 218 |
+| `datagram/video_fragment_1200/trailing_bytes/encode` | 122 | 109 | 226 | 220 | 240 | 220 | 238 | 218 |
 
 ### `opt-level = "s"`
 
