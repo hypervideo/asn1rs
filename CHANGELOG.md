@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
  - Implement `UperReader::into_bits` ([aa6b083], [gh-82], [@jkalez])
  - Derive `Clone` for `UperReader` ([d6c5d18], [gh-83], [@jkalez])
+ - `RustCodeGenerator::add_field_attr` to add attributes to fields and variants
 ### Changed
  - Implement UperReader for ScopedBitReader over Bits ([aa6b083], [gh-81], [@jkalez])
 ### Deprecated
