@@ -1217,7 +1217,7 @@ pub(crate) mod tests {
         assert_eq!(
             ValueReference {
                 name: "answers".to_string(),
-                role: Type::OctetString(Size::Any).untagged(),
+                role: Type::unconstrained_octetstring().untagged(),
                 value: LiteralValue::OctetString(vec![0x42])
             },
             model.value_references[0]

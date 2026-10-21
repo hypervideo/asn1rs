@@ -89,6 +89,17 @@ impl<T: Iterator<Item = Token>> TryFrom<&mut Peekable<T>> for Tag {
     type Error = Error;
 
     fn try_from(iter: &mut Peekable<T>) -> Result<Self, Self::Error> {
+        let first = iter.next_or_err()?;
+        Tag::try_from_first_token(first, iter)
+    }
+}
+
+impl Tag {
+    /// Parses a tag whose first token, the class or the number, has already been taken from `iter`.
+    pub(crate) fn try_from_first_token<Tokens: Iterator<Item = Token>>(
+        first: Token,
+        iter: &mut Peekable<Tokens>,
+    ) -> Result<Self, Error> {
         macro_rules! parse_tag_number {
             () => {
                 parse_tag_number!(iter.next_or_err()?)
@@ -101,7 +112,7 @@ impl<T: Iterator<Item = Token>> TryFrom<&mut Peekable<T>> for Tag {
             }};
         }
 
-        Ok(match iter.next_or_err()? {
+        Ok(match first {
             t if t.eq_text_ignore_ascii_case("UNIVERSAL") => Tag::Universal(parse_tag_number!()),
             t if t.eq_text_ignore_ascii_case("APPLICATION") => {
                 Tag::Application(parse_tag_number!())

@@ -1,7 +1,7 @@
 use crate::asn::{
     Asn, ComponentTypeList, Range, Size, Tag, TagProperty, TagResolver, Type as AsnType, Type,
 };
-use crate::asn::{Charset, ChoiceVariant, Integer};
+use crate::asn::{Charset, ChoiceVariant, Integer, OctetString};
 use crate::model::Import;
 use crate::model::Model;
 use crate::model::ValueReference;
@@ -41,7 +41,9 @@ pub enum RustType {
     I64(Range<i64>),
     U64(Range<Option<u64>>),
     String(Size, Charset),
-    VecU8(Size),
+    /// An OCTET STRING, held in a `Vec<u8>`, or in the Rust type that the second value names. That
+    /// type has to implement `asn1rs::descriptor::octetstring::OctetStringType`.
+    OctetString(OctetString, Option<String>),
     BitVec(Size),
     Vec(Box<RustType>, Size, EncodingOrdering),
     Null,
@@ -59,6 +61,41 @@ pub enum RustType {
 }
 
 impl RustType {
+    /// An OCTET STRING without encoding instructions, held in a `Vec<u8>`.
+    pub const fn vec_u8(size: Size) -> Self {
+        RustType::OctetString(OctetString::with_size(size), None)
+    }
+
+    /// Holds the OCTET STRING in `rust_type` instead of `Vec<u8>`.
+    ///
+    /// This also applies to an OCTET STRING within an `Option`, a `Vec` or a default value. Returns
+    /// whether there is an OCTET STRING.
+    pub fn set_octet_string_type(&mut self, rust_type: &str) -> bool {
+        match self {
+            RustType::OctetString(_, current) => {
+                *current = Some(rust_type.to_string());
+                true
+            }
+            RustType::Option(inner) | RustType::Default(inner, _) | RustType::Vec(inner, ..) => {
+                inner.set_octet_string_type(rust_type)
+            }
+            RustType::Bool
+            | RustType::I8(_)
+            | RustType::U8(_)
+            | RustType::I16(_)
+            | RustType::U16(_)
+            | RustType::I32(_)
+            | RustType::U32(_)
+            | RustType::I64(_)
+            | RustType::U64(_)
+            | RustType::String(..)
+            | RustType::BitVec(_)
+            | RustType::Null
+            | RustType::Complex(..)
+            | RustType::Skip(_) => false,
+        }
+    }
+
     pub fn as_inner_type(&self) -> &RustType {
         if let RustType::Vec(inner, ..) | RustType::Option(inner) | RustType::Default(inner, ..) =
             self
@@ -178,7 +215,7 @@ impl RustType {
                 Some(Range(min.to_string(), max.to_string(), *extensible))
             }
             RustType::String(..) => None,
-            RustType::VecU8(_) => None,
+            RustType::OctetString(..) => None,
             RustType::BitVec(_) => None,
             RustType::Vec(inner, _size, _ordering) => inner.integer_range_str(),
             RustType::Null => None,
@@ -231,7 +268,7 @@ impl RustType {
                 range.extensible(),
             )),
             RustType::String(size, charset) => AsnType::String(size, charset),
-            RustType::VecU8(size) => AsnType::OctetString(size),
+            RustType::OctetString(octets, _) => AsnType::OctetString(octets),
             RustType::BitVec(size) => AsnType::bit_vec_with_size(size),
             RustType::Vec(inner, size, EncodingOrdering::Keep) => {
                 AsnType::SequenceOf(Box::new(inner.into_asn()), size)
@@ -261,7 +298,7 @@ impl RustType {
             RustType::U64(_) => matches!(other, RustType::U64(_)),
             RustType::I64(_) => matches!(other, RustType::I64(_)),
             RustType::String(..) => matches!(other, RustType::String(..)),
-            RustType::VecU8(_) => matches!(other, RustType::VecU8(_)),
+            RustType::OctetString(..) => matches!(other, RustType::OctetString(..)),
             RustType::BitVec(_) => matches!(other, RustType::BitVec(_)),
             RustType::Vec(inner_a, _size, _ordering) => {
                 if let RustType::Vec(inner_b, _other_size, _ordering) = other {
@@ -310,7 +347,7 @@ impl RustType {
             | RustType::I64(_)
             | RustType::U64(_) => Tag::DEFAULT_INTEGER,
             RustType::BitVec(_) => Tag::DEFAULT_BIT_STRING,
-            RustType::VecU8(_) => Tag::DEFAULT_OCTET_STRING,
+            RustType::OctetString(..) => Tag::DEFAULT_OCTET_STRING,
             RustType::String(_, charset) => charset.default_tag(),
             RustType::Vec(_, _, EncodingOrdering::Keep) => Tag::DEFAULT_SEQUENCE_OF,
             RustType::Vec(_, _, EncodingOrdering::Sort) => Tag::DEFAULT_SET_OF,
@@ -422,7 +459,7 @@ impl RustType {
             RustType::U64(_) => "u64",
             RustType::I64(_) => "i64",
             RustType::String(..) => "&'static str",
-            RustType::VecU8(_) => "&'static [u8]",
+            RustType::OctetString(..) => "&'static [u8]",
             RustType::BitVec(_) => "u64",
             RustType::Vec(inner, _size, _ordering) => {
                 return Cow::Owned(format!("&'static [{}]", inner.to_const_lit_string()))
@@ -451,7 +488,8 @@ impl ToString for RustType {
             RustType::U64(_) => "u64",
             RustType::I64(_) => "i64",
             RustType::String(..) => "String",
-            RustType::VecU8(_) => "Vec<u8>",
+            RustType::OctetString(_, Some(rust_type)) => return rust_type.clone(),
+            RustType::OctetString(_, None) => "Vec<u8>",
             RustType::BitVec(_) => "BitVec",
             RustType::Vec(inner, _size, _ordering) => return format!("Vec<{}>", inner.to_string()),
             RustType::Null => "Null",
@@ -490,6 +528,10 @@ impl Field {
 
     pub fn r#type(&self) -> &RustType {
         &self.name_type.1
+    }
+
+    pub(crate) fn type_mut(&mut self) -> &mut RustType {
+        &mut self.name_type.1
     }
 
     pub fn constants(&self) -> &[(String, String)] {
@@ -551,6 +593,10 @@ impl<T> Enumeration<T> {
         self.variants.iter()
     }
 
+    pub(crate) fn variants_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.variants.iter_mut()
+    }
+
     pub fn extension_after_index(&self) -> Option<usize> {
         self.extended_after_index
     }
@@ -609,6 +655,10 @@ impl DataVariant {
 
     pub fn r#type(&self) -> &RustType {
         &self.name_type.1
+    }
+
+    pub(crate) fn type_mut(&mut self) -> &mut RustType {
+        &mut self.name_type.1
     }
 }
 
@@ -681,7 +731,7 @@ impl Model<Rust> {
             }
             Type::Integer(int) => Self::asn_fixed_integer_to_rust_type(int),
             Type::String(size, charset) => RustType::String(size.clone(), *charset),
-            Type::OctetString(size) => RustType::VecU8(size.clone()),
+            Type::OctetString(octets) => RustType::OctetString(octets.clone(), None),
             Type::BitString(bs) => RustType::BitVec(bs.size.clone()),
             Type::Null => RustType::Null,
             Type::Optional(opt) => {
@@ -908,7 +958,7 @@ impl Model<Rust> {
             AsnType::Integer(int) => Self::asn_fixed_integer_to_rust_type(int),
 
             AsnType::String(size, charset) => RustType::String(size.clone(), *charset),
-            AsnType::OctetString(size) => RustType::VecU8(size.clone()),
+            AsnType::OctetString(octets) => RustType::OctetString(octets.clone(), None),
             AsnType::BitString(bitstring) => RustType::BitVec(bitstring.size.clone()),
             Type::Optional(inner) => {
                 RustType::Option(Box::new(Self::definition_type_to_rust_type(
@@ -1634,7 +1684,7 @@ mod tests {
                             "BerndDasBrot",
                             RustType::String(Size::Any, Charset::Utf8),
                         ),
-                        DataVariant::from_name_type("NochSoEinBrot", RustType::VecU8(Size::Any)),
+                        DataVariant::from_name_type("NochSoEinBrot", RustType::vec_u8(Size::Any)),
                     ]
                     .into()
                 ),
@@ -1687,7 +1737,7 @@ mod tests {
                             "NestedList",
                             RustType::Vec(
                                 Box::new(RustType::Vec(
-                                    Box::new(RustType::VecU8(Size::Any)),
+                                    Box::new(RustType::vec_u8(Size::Any)),
                                     Size::Any,
                                     EncodingOrdering::Keep
                                 )),
@@ -1935,7 +1985,7 @@ mod tests {
                 "Extensible".into(),
                 Rust::DataEnum(
                     DataEnum::from(vec![
-                        DataVariant::from_name_type("Abc".to_string(), RustType::VecU8(Size::Any)),
+                        DataVariant::from_name_type("Abc".to_string(), RustType::vec_u8(Size::Any)),
                         DataVariant::from_name_type(
                             "Def".to_string(),
                             RustType::U64(Range::none()),
@@ -1980,7 +2030,7 @@ mod tests {
     #[test]
     pub fn test_tag_property_rust_tuple_struct() {
         test_property(Rust::TupleStruct {
-            r#type: RustType::VecU8(Size::Any),
+            r#type: RustType::vec_u8(Size::Any),
             tag: None,
             constants: Vec::default(),
         });

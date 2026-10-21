@@ -46,7 +46,7 @@ impl ProtobufType {
             ProtobufType::SInt32 => RustType::I32(Range::inclusive(0, i32::MAX)),
             ProtobufType::SInt64 => RustType::I64(Range::inclusive(0, i64::MAX)),
             ProtobufType::String => RustType::String(Size::Any, Charset::Utf8),
-            ProtobufType::Bytes => RustType::VecU8(Size::Any),
+            ProtobufType::Bytes => RustType::vec_u8(Size::Any),
             ProtobufType::BitsReprByBytesAndBitsLen => RustType::BitVec(Size::Any),
             ProtobufType::Repeated(inner) => {
                 RustType::Vec(Box::new(inner.to_rust()), Size::Any, EncodingOrdering::Keep)
@@ -193,7 +193,7 @@ impl Model<Protobuf> {
             RustType::U64(_) => ProtobufType::UInt64,
             RustType::I64(_) => ProtobufType::SInt64,
             RustType::String(..) => ProtobufType::String,
-            RustType::VecU8(_) => ProtobufType::Bytes,
+            RustType::OctetString(..) => ProtobufType::Bytes,
             RustType::BitVec(_) => ProtobufType::BitsReprByBytesAndBitsLen,
             RustType::Null => ProtobufType::Bytes,
 
@@ -384,7 +384,7 @@ mod tests {
                 ),
                 Definition(
                     "Second".into(),
-                    Rust::tuple_struct_from_type(RustType::VecU8(Size::Any)),
+                    Rust::tuple_struct_from_type(RustType::vec_u8(Size::Any)),
                 ),
             ],
             &[

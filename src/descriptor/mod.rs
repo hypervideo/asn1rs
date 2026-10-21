@@ -112,6 +112,19 @@ pub trait Reader {
 
     fn read_octet_string<C: octetstring::Constraint>(&mut self) -> Result<Vec<u8>, Self::Error>;
 
+    /// Reads an OCTET STRING into an `Octets`.
+    ///
+    /// Readers that can avoid copying the octets override this.
+    #[inline]
+    fn read_octet_string_as<
+        Constraint: octetstring::Constraint,
+        Octets: octetstring::OctetStringType,
+    >(
+        &mut self,
+    ) -> Result<Octets, Self::Error> {
+        self.read_octet_string::<Constraint>().map(Octets::from_vec)
+    }
+
     fn read_bit_string<C: bitstring::Constraint>(&mut self) -> Result<(Vec<u8>, u64), Self::Error>;
 
     fn read_boolean<C: boolean::Constraint>(&mut self) -> Result<bool, Self::Error>;

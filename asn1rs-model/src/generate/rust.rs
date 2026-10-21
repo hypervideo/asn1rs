@@ -39,6 +39,10 @@ pub struct RustCodeGenerator {
     global_derives: Vec<String>,
     local_derives: HashMap<String, Vec<String>>,
     local_attrs: HashMap<String, Vec<String>>,
+    /// Attributes of fields and variants, by type name and then field or variant name
+    field_attrs: HashMap<String, HashMap<String, Vec<String>>>,
+    /// Rust types for OCTET STRINGs, by type name and then field or variant name
+    octet_string_types: HashMap<String, HashMap<String, String>>,
     direct_field_access: bool,
     getter_and_setter: bool,
 }
@@ -58,6 +62,8 @@ impl Default for RustCodeGenerator {
             global_derives: Vec::default(),
             local_derives: HashMap::new(),
             local_attrs: HashMap::new(),
+            field_attrs: HashMap::new(),
+            octet_string_types: HashMap::new(),
             direct_field_access: true,
             getter_and_setter: false,
         }
@@ -117,6 +123,93 @@ impl RustCodeGenerator {
     pub fn without_additional_local_attrs(mut self) -> Self {
         self.local_attrs.clear();
         self
+    }
+
+    /// Adds an attribute to a field of a struct or to a variant of an enum.
+    ///
+    /// `name` is the name of the type, and `field` the name of the field or variant in Rust, for
+    /// example `add_field_attr("Fragment", "key_frame", r#"serde(rename = "key")"#)`.
+    pub fn add_field_attr<
+        TypeName: Into<String>,
+        FieldName: Into<String>,
+        Attribute: Into<String>,
+    >(
+        &mut self,
+        name: TypeName,
+        field: FieldName,
+        attr: Attribute,
+    ) {
+        self.field_attrs
+            .entry(name.into())
+            .or_default()
+            .entry(field.into())
+            .or_default()
+            .push(attr.into());
+    }
+
+    /// Holds the OCTET STRING of a field or variant in another Rust type than `Vec<u8>`.
+    ///
+    /// `name` is the name of the type, and `field` the name of the field or variant in Rust, or `0`
+    /// for a tuple struct. `rust_type` is a type that implements
+    /// `asn1rs::descriptor::octetstring::OctetStringType`, such as `bytes::Bytes`.
+    pub fn set_octet_string_type<
+        TypeName: Into<String>,
+        FieldName: Into<String>,
+        RustTypeName: Into<String>,
+    >(
+        &mut self,
+        name: TypeName,
+        field: FieldName,
+        rust_type: RustTypeName,
+    ) {
+        self.octet_string_types
+            .entry(name.into())
+            .or_default()
+            .insert(field.into(), rust_type.into());
+    }
+
+    /// The definition with the Rust types of [`Self::set_octet_string_type`] applied.
+    fn with_octet_string_types<'a>(
+        &self,
+        definition: &'a Definition<Rust>,
+    ) -> Cow<'a, Definition<Rust>> {
+        let Definition(name, rust) = definition;
+        let Some(types) = self.octet_string_types.get(name) else {
+            return Cow::Borrowed(definition);
+        };
+        let mut rust = rust.clone();
+        match &mut rust {
+            Rust::Struct { fields, .. } => {
+                for field in fields {
+                    if let Some(rust_type) = types.get(field.name()) {
+                        field.type_mut().set_octet_string_type(rust_type);
+                    }
+                }
+            }
+            Rust::DataEnum(enumeration) => {
+                for variant in enumeration.variants_mut() {
+                    if let Some(rust_type) = types.get(&Self::rust_variant_name(variant.name())) {
+                        variant.type_mut().set_octet_string_type(rust_type);
+                    }
+                }
+            }
+            Rust::TupleStruct { r#type, .. } => {
+                if let Some(rust_type) = types.get("0") {
+                    r#type.set_octet_string_type(rust_type);
+                }
+            }
+            Rust::Enum(_) => {}
+        }
+        Cow::Owned(Definition(name.clone(), rust))
+    }
+
+    /// The attributes of [`Self::add_field_attr`] for a field or variant, each followed by a space.
+    fn field_attrs(&self, name: &str, field: &str) -> String {
+        self.field_attrs
+            .get(name)
+            .and_then(|fields| fields.get(field))
+            .map(|attrs| attrs.iter().map(|attr| format!("#[{}] ", attr)).collect())
+            .unwrap_or_default()
     }
 
     pub const fn fields_are_pub(&self) -> bool {
@@ -181,6 +274,7 @@ impl RustCodeGenerator {
         }
 
         for definition in &model.definitions {
+            let definition = &*self.with_octet_string_types(definition);
             self.add_definition(&mut scope, definition);
             Self::impl_definition(&mut scope, definition, generators, self.getter_and_setter);
 
@@ -223,7 +317,7 @@ impl RustCodeGenerator {
                     extension_after.map(|index| fields[index].name().to_string()),
                     &[],
                 ));
-                Self::add_struct(
+                self.add_struct(
                     self.new_struct(scope, name),
                     name,
                     fields,
@@ -250,7 +344,7 @@ impl RustCodeGenerator {
                     data.extension_after_variant().map(|v| v.name().to_string()),
                     &[],
                 ));
-                Self::add_data_enum(self.new_enum(scope, name, false), name, data)
+                self.add_data_enum(self.new_enum(scope, name, false), name, data)
             }
             Rust::TupleStruct {
                 r#type,
@@ -270,7 +364,7 @@ impl RustCodeGenerator {
         }
     }
 
-    fn add_struct(str_ct: &mut Struct, _name: &str, fields: &[Field], pub_access: bool) {
+    fn add_struct(&self, str_ct: &mut Struct, name: &str, fields: &[Field], pub_access: bool) {
         for field in fields {
             let Some(attr_type) = Self::asn_attribute_type(&field.r#type().clone().into_asn())
             else {
@@ -278,7 +372,8 @@ impl RustCodeGenerator {
             };
             str_ct.field(
                 &format!(
-                    "{} {}{}",
+                    "{}{} {}{}",
+                    self.field_attrs(name, field.name()),
                     Self::asn_attribute(attr_type, field.tag(), None, field.constants(),),
                     if pub_access { "pub " } else { "" },
                     Self::rust_field_name(field.name(), true),
@@ -300,16 +395,18 @@ impl RustCodeGenerator {
         }
     }
 
-    fn add_data_enum(en_m: &mut Enum, _name: &str, enumeration: &DataEnum) {
+    fn add_data_enum(&self, en_m: &mut Enum, name: &str, enumeration: &DataEnum) {
         for variant in enumeration.variants() {
             let Some(attr_type) = Self::asn_attribute_type(&variant.r#type().clone().into_asn())
             else {
                 continue;
             };
+            let variant_name = Self::rust_variant_name(variant.name());
             en_m.new_variant(&format!(
-                "{} {}({})",
+                "{}{} {}({})",
+                self.field_attrs(name, &variant_name),
                 Self::asn_attribute(attr_type, variant.tag(), None, &[],),
-                Self::rust_variant_name(variant.name()),
+                variant_name,
                 variant.r#type().to_string(),
             ));
         }
@@ -400,12 +497,15 @@ impl RustCodeGenerator {
                     .flatten()
                     .collect(),
             ),
-            Type::OctetString(size) => (
+            Type::OctetString(octets) => (
                 Cow::Borrowed("octet_string"),
-                vec![size.to_constraint_string()]
-                    .into_iter()
-                    .flatten()
-                    .collect(),
+                vec![
+                    octets.size.to_constraint_string(),
+                    octets.trailing.then(|| "trailing".to_string()),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
             ),
             Type::BitString(bitstring) => (
                 Cow::Borrowed("bit_string"),
@@ -1072,6 +1172,122 @@ pub(crate) mod tests {
 
         "#,
             &file_content,
+        );
+    }
+
+    #[test]
+    pub fn test_field_attrs() {
+        let model = Model::try_from(Tokenizer::default().parse(
+            r#"FieldAttrs DEFINITIONS AUTOMATIC TAGS ::=
+            BEGIN
+
+            Datagram ::= CHOICE {
+                fragment Fragment,
+                ping Fragment
+            }
+
+            Fragment ::= SEQUENCE {
+                keyFrame BOOLEAN,
+                data OCTET STRING
+            }
+
+            END
+        "#,
+        ))
+        .unwrap()
+        .try_resolve()
+        .unwrap()
+        .to_rust();
+
+        let mut generator = RustCodeGenerator::from(model).without_additional_global_derives();
+        generator.add_field_attr("Datagram", "Fragment", r#"serde(rename = "Data")"#);
+        generator.add_field_attr("Fragment", "key_frame", r#"serde(rename = "key")"#);
+        generator.add_field_attr("Fragment", "data", "serde(skip)");
+        generator.add_field_attr("Fragment", "data", "doc(hidden)");
+        let (_file_name, file_content) = generator
+            .to_string_without_generators()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert_starts_with_lines(
+            r#"
+            use asn1rs::prelude::*;
+
+            #[asn(choice)]
+            #[derive(Debug, Clone, PartialEq, Hash)]
+            pub enum Datagram {
+                #[serde(rename = "Data")] #[asn(complex(Fragment, tag(UNIVERSAL(16))))] Fragment(Fragment),
+                #[asn(complex(Fragment, tag(UNIVERSAL(16))))] Ping(Fragment),
+            }
+        "#,
+            &file_content,
+        );
+        assert!(
+            file_content.contains(
+                r#"    #[serde(rename = "key")] #[asn(boolean)] pub key_frame: bool,
+    #[serde(skip)] #[doc(hidden)] #[asn(octet_string)] pub data: Vec<u8>,"#
+            ),
+            "{}",
+            file_content
+        );
+    }
+
+    #[test]
+    pub fn test_trailing_octet_string_with_octet_string_type() {
+        let model = Model::try_from(Tokenizer::default().parse(
+            r#"TrailingOctets DEFINITIONS AUTOMATIC TAGS ::=
+            BEGIN
+
+            Datagram ::= CHOICE {
+                fragment Fragment,
+                ping Fragment
+            }
+
+            Fragment ::= SEQUENCE {
+                keyFrame BOOLEAN,
+                data [PER: TRAILING] OCTET STRING (SIZE(0..1791))
+            }
+
+            END
+        "#,
+        ))
+        .unwrap()
+        .try_resolve()
+        .unwrap()
+        .to_rust();
+
+        let mut generator = RustCodeGenerator::from(model).without_additional_global_derives();
+        generator.add_field_attr("Datagram", "Fragment", r#"serde(rename = "Data")"#);
+        generator.add_field_attr("Fragment", "key_frame", r#"serde(rename = "key")"#);
+        generator.add_field_attr("Fragment", "data", "serde(skip)");
+        generator.set_octet_string_type("Fragment", "data", "bytes::Bytes");
+        let (_file_name, file_content) = generator
+            .to_string_without_generators()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert_starts_with_lines(
+            r#"
+            use asn1rs::prelude::*;
+
+            #[asn(choice)]
+            #[derive(Debug, Clone, PartialEq, Hash)]
+            pub enum Datagram {
+                #[serde(rename = "Data")] #[asn(complex(Fragment, tag(UNIVERSAL(16))))] Fragment(Fragment),
+                #[asn(complex(Fragment, tag(UNIVERSAL(16))))] Ping(Fragment),
+            }
+        "#,
+            &file_content,
+        );
+        assert!(
+            file_content.contains(
+                r#"    #[serde(rename = "key")] #[asn(boolean)] pub key_frame: bool,
+    #[serde(skip)] #[asn(octet_string(size(0..1791), trailing))] pub data: bytes::Bytes,"#
+            ),
+            "{}",
+            file_content
         );
     }
 

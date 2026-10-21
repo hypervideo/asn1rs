@@ -6,6 +6,7 @@
 pub mod err;
 pub mod unaligned;
 
+use crate::descriptor::octetstring::OctetStringType;
 pub use err::Error;
 pub use err::ErrorKind;
 
@@ -71,6 +72,14 @@ pub trait PackedRead {
         upper_bound_size: Option<u64>,
         extensible: bool,
     ) -> Result<Vec<u8>, Error>;
+
+    /// Like [`PackedRead::read_octetstring`], but into any [`OctetStringType`].
+    fn read_octetstring_as<Octets: OctetStringType>(
+        &mut self,
+        lower_bound_size: Option<u64>,
+        upper_bound_size: Option<u64>,
+        extensible: bool,
+    ) -> Result<Octets, Error>;
 
     fn read_choice_index(&mut self, std_variants: u64, extensible: bool) -> Result<u64, Error>;
 

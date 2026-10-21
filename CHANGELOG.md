@@ -13,12 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - `BitRead::read_bits_u64` and `BitWrite::write_bits_u64` to read and write up to 64 bits as an
    integer, with default implementations for existing implementors of the traits
  - UPER benchmark in `benches/uper.rs`, which also runs on `wasm32-wasip1`
+ - `RustCodeGenerator::add_field_attr` to add attributes to fields and variants
+ - The PER encoding instruction `[PER: TRAILING]` for `OCTET STRING`, written as an ITU-T X.680
+   encoding prefix (`data [PER: TRAILING] OCTET STRING`) or as `#[asn(octet_string(trailing))]`.
+   In UPER, the octets start at the next octet boundary and extend to the end of the encoding,
+   without a length determinant. This instruction is specific to asn1rs
+ - `OCTET STRING`s can be held in any `OctetStringType`, such as `bytes::Bytes` with the new
+   `bytes` feature. The attribute macro takes the type from the field, and
+   `RustCodeGenerator::set_octet_string_type` sets it for generated code
+ - `SharedBits` (feature `bytes`) reads from a `bytes::Bytes` and hands out `OCTET STRING`s that
+   start at an octet boundary without copying them
 ### Changed
+ - `asn1rs_model::asn::Type::OctetString` holds an `OctetString` with the size and the encoding
+   instruction, and `RustType::VecU8` is now `RustType::OctetString`
  - Implement UperReader for ScopedBitReader over Bits ([aa6b083], [gh-81], [@jkalez])
  - Faster UPER encoding and decoding, see [PERFORMANCE.md](PERFORMANCE.md): bit copies word
    at a time, vector kernels for unaligned bulk copies (SSE2, NEON, and `simd128` when compiling
    for wasm32 with `-C target-feature=+simd128`), integers without a detour through byte arrays,
-   and zeroed slack after the content of a `BitBuffer`
+   zeroed slack after the content of a `BitBuffer`, and octet-aligned bytes appended to a
+   `BitBuffer` without zeroing them first
  - Copying a bit range keeps the destination bits after the range. Before, copies of more than
    16 bits between different bit offsets within a byte cleared the rest of the last destination
    byte
