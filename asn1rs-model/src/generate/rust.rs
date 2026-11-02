@@ -208,7 +208,12 @@ impl RustCodeGenerator {
         self.field_attrs
             .get(name)
             .and_then(|fields| fields.get(field))
-            .map(|attrs| attrs.iter().map(|attr| format!("#[{}] ", attr)).collect())
+            .map(|attrs| {
+                attrs
+                    .iter()
+                    .flat_map(|attr| ["#[", attr.as_str(), "] "])
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
