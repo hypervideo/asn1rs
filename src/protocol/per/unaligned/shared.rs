@@ -86,7 +86,7 @@ impl BitRead for SharedBits {
 
     #[inline]
     fn read_octets<Octets: OctetStringType>(&mut self, byte_len: usize) -> Result<Octets, Error> {
-        if !self.pos.is_multiple_of(BYTE_LEN) {
+        if self.pos % BYTE_LEN != 0 {
             let mut octets = vec![0u8; byte_len];
             self.read_bits(&mut octets)?;
             return Ok(Octets::from_vec(octets));
