@@ -20,6 +20,10 @@ pub enum ErrorKind {
     InvalidIntText(Token),
     UnsupportedLiteral(Token),
     InvalidLiteral(Token),
+    /// An encoding prefix with an encoding reference or instruction that asn1rs does not know.
+    UnsupportedEncodingInstruction(Token),
+    /// An encoding instruction in front of a type that it does not apply to.
+    InapplicableEncodingInstruction(Token),
 }
 
 pub struct Error {
@@ -43,6 +47,11 @@ impl PartialEq for Error {
 }
 
 impl Error {
+    /// What went wrong.
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
+    }
+
     pub fn invalid_int_value(token: Token) -> Self {
         ErrorKind::InvalidIntText(token).into()
     }
@@ -99,6 +108,16 @@ impl Error {
         ErrorKind::UnsupportedLiteral(token).into()
     }
 
+    /// See [`ErrorKind::UnsupportedEncodingInstruction`].
+    pub fn unsupported_encoding_instruction(token: Token) -> Self {
+        ErrorKind::UnsupportedEncodingInstruction(token).into()
+    }
+
+    /// See [`ErrorKind::InapplicableEncodingInstruction`].
+    pub fn inapplicable_encoding_instruction(token: Token) -> Self {
+        ErrorKind::InapplicableEncodingInstruction(token).into()
+    }
+
     fn backtrace(&self) -> &Backtrace {
         &self.backtrace
     }
@@ -120,6 +139,8 @@ impl Error {
             ErrorKind::InvalidIntText(t) => Some(t),
             ErrorKind::UnsupportedLiteral(t) => Some(t),
             ErrorKind::InvalidLiteral(t) => Some(t),
+            ErrorKind::UnsupportedEncodingInstruction(t) => Some(t),
+            ErrorKind::InapplicableEncodingInstruction(t) => Some(t),
         }
     }
 }
@@ -229,6 +250,20 @@ impl Display for Error {
             ErrorKind::InvalidLiteral(token) => write!(
                 f,
                 "At line {}, column {} an invalid literal was discovered: {}",
+                token.location().line(),
+                token.location().column(),
+                token
+            ),
+            ErrorKind::UnsupportedEncodingInstruction(token) => write!(
+                f,
+                "At line {}, column {} an unsupported encoding instruction was discovered: {}",
+                token.location().line(),
+                token.location().column(),
+                token
+            ),
+            ErrorKind::InapplicableEncodingInstruction(token) => write!(
+                f,
+                "At line {}, column {} the encoding instruction {} does not apply to the type that follows it",
                 token.location().line(),
                 token.location().column(),
                 token

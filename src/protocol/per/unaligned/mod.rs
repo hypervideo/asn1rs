@@ -1,7 +1,10 @@
+use crate::descriptor::octetstring::OctetStringType;
 use crate::protocol::per::{Error, ErrorKind};
 use crate::protocol::per::{PackedRead, PackedWrite};
 
 pub mod buffer;
+#[cfg(feature = "bytes")]
+pub mod shared;
 pub mod slice;
 
 pub const BYTE_LEN: usize = 8;
@@ -33,6 +36,17 @@ pub trait BitRead {
         dst_bit_offset: usize,
         dst_bit_len: usize,
     ) -> Result<(), Error>;
+
+    /// Reads `byte_len` octets into an `Octets`.
+    ///
+    /// Sources that hold their content in shared memory override this to hand out octets that
+    /// start at an octet boundary without copying them.
+    #[inline]
+    fn read_octets<Octets: OctetStringType>(&mut self, byte_len: usize) -> Result<Octets, Error> {
+        let mut octets = vec![0u8; byte_len];
+        self.read_bits(&mut octets)?;
+        Ok(Octets::from_vec(octets))
+    }
 }
 
 pub trait ScopedBitRead: BitRead {
@@ -310,6 +324,19 @@ impl<T: BitRead> PackedRead for T {
         upper_bound_size: Option<u64>,
         extensible: bool,
     ) -> Result<Vec<u8>, Error> {
+        self.read_octetstring_as(lower_bound_size, upper_bound_size, extensible)
+    }
+
+    /// ITU-T X.691 | ISO/IEC 8825-2:2015, chapter 17
+    #[inline]
+    #[allow(clippy::suspicious_else_formatting)] // for 17.6 else-if comment block
+    #[allow(clippy::redundant_pattern_matching)] // allow for const_*!
+    fn read_octetstring_as<Octets: OctetStringType>(
+        &mut self,
+        lower_bound_size: Option<u64>,
+        upper_bound_size: Option<u64>,
+        extensible: bool,
+    ) -> Result<Octets, Error> {
         // let lower_bound = const_unwrap_or!(lower_bound_size, 0);
         let upper_bound = const_unwrap_or!(upper_bound_size, i64::MAX as u64);
 
@@ -320,7 +347,7 @@ impl<T: BitRead> PackedRead for T {
             (self.read_length_determinant(None, None)?, true)
         } else if upper_bound == 0 {
             // 17.5
-            return Ok(Vec::default());
+            return Ok(Octets::from_vec(Vec::default()));
         }
         /* else if const_is_some!(lower_bound_size)
             && lower_bound_size == upper_bound_size
@@ -343,24 +370,26 @@ impl<T: BitRead> PackedRead for T {
             )
         };
 
+        // fragmentation?
+        if !fragmentation_possible || byte_len < LENGTH_16K {
+            return self.read_octets(byte_len as usize);
+        }
+
         let mut buffer = vec![0u8; byte_len as usize];
         self.read_bits(&mut buffer[..])?;
 
-        // fragmentation?
-        if fragmentation_possible && byte_len >= LENGTH_16K {
-            loop {
-                let ext_byte_len = self.read_length_determinant(None, None)?;
-                buffer.extend(core::iter::repeat(0u8).take(ext_byte_len as usize));
-                self.read_bits(&mut buffer[byte_len as usize..])?;
-                byte_len += ext_byte_len;
+        loop {
+            let ext_byte_len = self.read_length_determinant(None, None)?;
+            buffer.extend(core::iter::repeat(0u8).take(ext_byte_len as usize));
+            self.read_bits(&mut buffer[byte_len as usize..])?;
+            byte_len += ext_byte_len;
 
-                if ext_byte_len < LENGTH_16K {
-                    break;
-                }
+            if ext_byte_len < LENGTH_16K {
+                break;
             }
         }
 
-        Ok(buffer)
+        Ok(Octets::from_vec(buffer))
     }
 
     #[inline]
