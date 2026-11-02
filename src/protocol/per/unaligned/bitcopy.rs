@@ -162,7 +162,6 @@ fn shift_left(dst: &mut [u8], src: &[u8], shift: u32) {
 
 /// [`shift_left`] for eight bytes at a time within a `u64`.
 #[inline]
-#[allow(clippy::chunks_exact_to_as_chunks)] // as_chunks_mut requires Rust 1.88
 fn shift_left_swar(dst: &mut [u8], src: &[u8], shift: u32) {
     // Within a little endian word, byte `k` occupies bits `8k..8k + 8`. Shifting the whole word
     // moves bits across byte boundaries, which the masks remove again.
