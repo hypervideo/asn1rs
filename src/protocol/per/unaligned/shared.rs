@@ -80,6 +80,11 @@ impl BitRead for SharedBits {
     }
 
     #[inline]
+    fn read_bits_u64(&mut self, bit_len: usize) -> Result<u64, Error> {
+        BitRead::read_bits_u64(&mut (&self.bytes[..], &mut self.pos), bit_len)
+    }
+
+    #[inline]
     fn read_octets<Octets: OctetStringType>(&mut self, byte_len: usize) -> Result<Octets, Error> {
         if self.pos % BYTE_LEN != 0 {
             let mut octets = vec![0u8; byte_len];
